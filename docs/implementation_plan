@@ -1,0 +1,129 @@
+# Day 2: Python Extraction Engine — Implementation Plan
+
+Build a production-grade, modular Python extraction package in `src/extract/` that extracts Spotify catalog metadata for our target roster and stores immutable raw JSON in `data/raw/`.
+
+---
+
+## 💡 Architecture & Conceptual Breakdown
+
+Before writing code, let's address your questions regarding **Docker vs. Local Execution** and **Understanding vs. Copy-Pasting**:
+
+### 1. Do we need to setup Docker first or can we use the old one?
+> **Answer: We do NOT need Docker for Day 2!**
+> - **Day 2 Scope**: In Day 2, we are building and verifying the pure Python ingestion logic (`requests`, token management, 429 backoff, pagination loops). Running locally via `.venv\Scripts\python` is much faster, has zero container overhead, and lets us inspect raw JSON files directly in `data/raw/`.
+> - **When Docker Comes In**: Docker & Airflow orchestration come into play on **Day 8 (Airflow Orchestration)** and **Day 10 (Production Containerization & CI/CD)**. When we reach Day 8, we will reuse and adapt the existing `airflow/docker-compose.yaml`.
+
+---
+
+### 2. Core Concepts: Why Each Component is Designed This Way
+
+```
+src/extract/
+├── __init__.py
+├── spotify_client.py     ──▶ [1] Token Manager + 429 Rate-Limit Retry Engine
+├── artist_extractor.py   ──▶ [2] Artist Search & Canonical ID Resolver
+├── album_extractor.py    ──▶ [3] Discography Paginator (limit=10)
+├── track_extractor.py    ──▶ [4] Album Track Paginator (limit=10)
+└── main.py               ──▶ [5] Master Orchestrator (Writes to data/raw/)
+```
+
+| Component | Responsibility | Why We Design It This Way |
+| :--- | :--- | :--- |
+| **`spotify_client.py`** | Token Caching + Resilient HTTP | Spotify tokens expire in 1 hour (3600s). Re-authenticating on every request triggers rate limits. We cache the token with a 60s safety buffer. When hit with HTTP 429, we parse the `Retry-After` header and back off with exponential jitter. |
+| **`artist_extractor.py`** | Search & Canonical Entity Resolution | Takes natural artist names (e.g. "Taylor Swift"), resolves their canonical `artist_id`, extracts high-res image URLs, Spotify URI, genres, and attaches `extracted_at`. |
+| **`album_extractor.py`** | Discography Paginator | Spotify's 2026 API limits album page size to `limit=10`. We implement a strict offset paginator (`offset += len(items)`) covering Studio Albums, Singles, and Compilations, deduplicating album IDs. |
+| **`track_extractor.py`** | Track Paginator | Paginates through `/v1/albums/{id}/tracks` using `limit=10`. Traverses all tracks and captures duration, explicit flag, track number, disc number, and foreign keys (`album_id`, `artist_id`). |
+| **`main.py`** | Master Orchestration & Raw Storage | Coordinates the 8 target artists, injects the critical temporal audit field **`snapshot_date`** (`YYYY-MM-DD`), and writes partitioned, immutable JSON payloads to `data/raw/artists/`, `data/raw/albums/`, `data/raw/tracks/`. |
+
+---
+
+## 🎯 Target Roster (8 Superstars across Eras & Genres)
+
+To reach the target scale of **8 Artists, ~800 Albums/Singles, ~4,000 Tracks**:
+1. **Taylor Swift** (Pop / Country — Large catalog)
+2. **The Weeknd** (R&B / Pop — Extensive singles & albums)
+3. **Drake** (Hip-Hop — High volume releases)
+4. **Ed Sheeran** (Pop / Acoustic — Multi-album discography)
+5. **Billie Eilish** (Alt-Pop — Modern concise discography)
+6. **Ariana Grande** (Pop / R&B — Hitmaker catalog)
+7. **Coldplay** (Rock / Alt-Rock — 25-year catalog)
+8. **BTS** (K-Pop / Global — Massive international release catalog)
+
+---
+
+## Proposed Changes
+
+### Component: Python Extraction Engine (`src/extract/`)
+
+#### [NEW] [__init__.py](file:///d:/data_engineering/Project_DE/spotify-pipeline/src/__init__.py)
+- Package root.
+
+#### [NEW] [__init__.py](file:///d:/data_engineering/Project_DE/spotify-pipeline/src/extract/__init__.py)
+- Exposes `SpotifyClient`, `ArtistExtractor`, `AlbumExtractor`, `TrackExtractor`.
+
+#### [NEW] [spotify_client.py](file:///d:/data_engineering/Project_DE/spotify-pipeline/src/extract/spotify_client.py)
+- Implements `SpotifyClient`:
+  - `_get_access_token()`: OAuth 2.0 Client Credentials flow using base64 header.
+  - `_ensure_valid_token()`: Checks if current time >= `token_expiry_epoch - 60`.
+  - `get(endpoint, params, max_retries, base_delay)`:
+    - Automatically attaches `Authorization: Bearer <token>`.
+    - Handles `HTTP 429` by reading `Retry-After` header + jitter sleep.
+    - Handles transient `5xx` errors with exponential backoff.
+    - Handles unexpected `401` by refreshing token and retrying.
+
+#### [NEW] [artist_extractor.py](file:///d:/data_engineering/Project_DE/spotify-pipeline/src/extract/artist_extractor.py)
+- Implements `ArtistExtractor`:
+  - `extract_artist(artist_name)`: Queries `/v1/search` with `type=artist&limit=1`.
+  - Formats output: `artist_id`, `artist_name`, `spotify_uri`, `image_url`, `genres`, `extracted_at`.
+
+#### [NEW] [album_extractor.py](file:///d:/data_engineering/Project_DE/spotify-pipeline/src/extract/album_extractor.py)
+- Implements `AlbumExtractor`:
+  - `extract_albums(artist_id, artist_name)`: Paginates `/v1/artists/{id}/albums` with `limit=10` & `include_groups=album,single,compilation`.
+  - Loops until `offset >= total` or items list empty.
+  - Deduplicates albums by `album_id`.
+
+#### [NEW] [track_extractor.py](file:///d:/data_engineering/Project_DE/spotify-pipeline/src/extract/track_extractor.py)
+- Implements `TrackExtractor`:
+  - `extract_tracks(album_id, artist_id)`: Paginates `/v1/albums/{id}/tracks` with `limit=10`.
+  - Loops until `offset >= total`.
+  - Preserves track metadata, track numbers, and explicit flags.
+
+#### [NEW] [main.py](file:///d:/data_engineering/Project_DE/spotify-pipeline/src/extract/main.py)
+- Implements `run_extraction(target_artists, output_dir, snapshot_date)`:
+  - Iterates over the 8 target artists.
+  - Enriches every entity with `snapshot_date: YYYY-MM-DD`.
+  - Writes partitioned raw JSON files to:
+    - `data/raw/artists/artists_{snapshot_date}.json`
+    - `data/raw/albums/albums_{snapshot_date}.json`
+    - `data/raw/tracks/tracks_{snapshot_date}.json`
+  - Generates comprehensive run summary and statistics.
+
+---
+
+### Component: Unit Tests & Verification (`tests/`)
+
+#### [NEW] [test_extraction.py](file:///d:/data_engineering/Project_DE/spotify-pipeline/tests/test_extraction.py)
+- Unit tests validating:
+  - Token caching & refresh logic.
+  - Mocked 429 Retry-After handling.
+  - Entity schema formatting & field preservation.
+  - Snapshot date injection.
+
+---
+
+## 🔍 Verification Plan
+
+### Automated Tests
+1. **Run pytest unit tests**:
+   ```powershell
+   .\.venv\Scripts\pytest tests/test_extraction.py -v
+   ```
+2. **Execute master extraction pipeline**:
+   ```powershell
+   .\.venv\Scripts\python -m src.extract.main
+   ```
+3. **Inspect Output Files & Record Counts in `data/raw/`**:
+   - Verify `data/raw/artists/artists_YYYY-MM-DD.json` contains 8 artists.
+   - Verify `data/raw/albums/albums_YYYY-MM-DD.json` contains ~800 albums.
+   - Verify `data/raw/tracks/tracks_YYYY-MM-DD.json` contains ~4,000 tracks.
+   - Verify all records contain `snapshot_date` and `extracted_at`.
