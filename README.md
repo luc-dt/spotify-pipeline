@@ -283,10 +283,19 @@ Production pipelines must fail gracefully and recover predictably. The platform 
 
 # Results & Execution Evidence
 
-*(This section will document execution row counts, PySpark execution timings, Parquet compression metrics, and sample SQL output tables upon Gold layer deployment).*
+### 📊 Storage Compression Benchmark (Raw JSON ➔ Bronze Snappy Parquet)
+Verified via `python -m scripts.verify_bronze` on snapshot `2026-08-31`:
 
-- **Storage Efficiency:** Estimated ~70–80% storage footprint reduction when converting raw JSON to Snappy Parquet (consistent with columnar compression benchmarks; empirical measurements will be recorded upon full extraction runs).
-- **Query Latency:** Columnar partitioning and projection designed for sub-second analytical scans in Athena and DuckDB.
+| Entity | Expected Rows | Parquet Rows | Raw JSON Size | Bronze Parquet Size | Storage Savings |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Artists** | 8 | 8 | 2.7 KB | 3.7 KB | -36.4% *(metadata overhead on tiny N)* |
+| **Albums** | 741 | 741 | 393.7 KB | 76.8 KB | **80.5%** |
+| **Tracks** | 2,500 | 2,500 | 1,063.7 KB | 182.6 KB | **82.8%** |
+| **TOTAL** | **3,249** | **3,249** | **1,460.1 KB** | **263.1 KB** | **82.0% Reduction** |
+
+- **Storage Efficiency:** Empirical **82.0% footprint reduction** when transforming raw multi-line JSON into partitioned Snappy Parquet.
+- **Idempotency Verified:** Back-to-back partition writes result in zero duplicate records.
+- **Query Latency:** Columnar partitioning by `snapshot_date=YYYY-MM-DD/` designed for sub-second analytical partition pruning in Athena and DuckDB.
 
 ---
 
@@ -355,9 +364,9 @@ docker-compose up -d
 
 ### 10-Day Master Roadmap Status:
 - [x] **Day 1: API Audit & Project Setup** (OAuth 2.0 verification, schema contract & BRD)
-- [ ] **Day 2: Python Extraction Engine** (Modular extractors in `src/extract/`)
-- [ ] **Day 3: AWS S3 Raw Data Lake** (Partitioned cloud storage `extracted_at=...`)
-- [ ] **Day 4: Bronze Layer (PySpark)** (Raw JSON $\rightarrow$ structured Parquet)
+- [x] **Day 2: Python Extraction Engine** (Modular extractors in `src/extract/` — 8 Artists, 741 Albums, 2.5K Tracks)
+- [x] **Day 3: AWS S3 Raw Data Lake** (Partitioned S3 storage `extracted_at=...`, AES-256 encryption, 8 unit tests)
+- [x] **Day 4: Bronze Layer (PySpark)** (StructType schemas, multiLine JSON, Snappy Parquet, 82.0% compression, 5 unit tests)
 - [ ] **Day 5: Silver Layer & Data Quality** (Deduplication, cleaning & automated assertions)
 - [ ] **Day 6: Gold Layer & Snapshots** (Star Schema & `fact_artist_snapshot`)
 - [ ] **Day 7: Business Analytics (SQL)** (10–15 analytical business queries)
