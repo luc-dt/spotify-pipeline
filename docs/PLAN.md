@@ -73,8 +73,8 @@ The **Spotify Music Intelligence Platform** is an enterprise-grade cloud data pl
 | Day        | Phase                          | Core Deliverables                                                                       |  Priority  |
 | :--------- | :----------------------------- | :-------------------------------------------------------------------------------------- | :--------: |
 | **Day 1**  | **API Audit & Project Setup**  | ✅ **DONE** — Verified 2026 Spotify endpoints, live OAuth 2.0 flow, and schema contract | ⭐⭐⭐⭐⭐ |
-| **Day 2**  | **Python Extraction Engine**   | `spotify_client.py`, artist/album/track extractors, local raw JSON                      | ⭐⭐⭐⭐⭐ |
-| **Day 3**  | **AWS S3 Raw Data Lake**       | S3 bucket hierarchy, immutable raw partitioned storage (`extracted_at=...`)             |  ⭐⭐⭐⭐  |
+| **Day 2**  | **Python Extraction Engine**   | ✅ **DONE** — `src/extract/` package (Token caching, 429 backoff, paginators, `data/raw/` JSON) | ⭐⭐⭐⭐⭐ |
+| **Day 3**  | **AWS S3 Raw Data Lake**       | ✅ **DONE** — `src/storage/s3_uploader.py`, Hive partitioning, SSE-S3 AES-256, 8 unit tests |  ⭐⭐⭐⭐  |
 | **Day 4**  | **Bronze Layer (PySpark)**     | Convert Raw JSON $\rightarrow$ structured Bronze Parquet, schema flattening             | ⭐⭐⭐⭐⭐ |
 | **Day 5**  | **Silver Layer & DQ Gate**     | Cleaning, deduplication, automated Data Quality validation checks                       | ⭐⭐⭐⭐⭐ |
 | **Day 6**  | **Gold Layer & Snapshots**     | Star Schema dimensions & `fact_artist_snapshot` historical tracking                     | ⭐⭐⭐⭐⭐ |
@@ -88,25 +88,25 @@ The **Spotify Music Intelligence Platform** is an enterprise-grade cloud data pl
 ## 📋 Detailed Day-by-Day Specifications
 
 ### 🗓️ Day 1 — API Research + Project Setup
-
 - **Goal**: Know exactly what data Spotify can give us before writing pipeline code.
 - **Tasks**:
   1. Create/verify Spotify Developer account & app in Development Mode.
   2. Test OAuth 2.0 Client Credentials token generation.
   3. Inspect live responses for Artist, Album, and Track endpoints.
-  4. Establish dataset scope (e.g. 100–300 artists $\rightarrow$ their albums $\rightarrow$ album tracks).
-- **Deliverables**: `.env.example`, `requirements.txt`, `docs/spotify_api.md`, `docs/business_requirements.md`.
+  4. Establish dataset scope (e.g. 8-artist curated cohort across genres & eras).
+- **Deliverables**: ✅ `.env.example`, `requirements.txt`, `docs/spotify_api.md`, `docs/business_requirements.md`, `scripts/test_spotify_auth.py`.
 
 ---
 
 ### 🗓️ Day 2 — Python Extraction Engine
-
-- **Goal**: Build a clean, modular, and reusable Spotify API client.
+- **Goal**: Build a production-grade, modular, and resilient Spotify API extraction package.
 - **Tasks**:
-  1. Create `src/extract/spotify_client.py` with exponential backoff & rate-limit handling.
-  2. Implement `extract_artists.py`, `extract_albums.py`, and `extract_tracks.py`.
-  3. Handle pagination (`offset` / `limit`), error logging, and extraction timestamps.
-- **Output**: Local JSON structure in `data/raw/`.
+  1. Build `src/extract/spotify_client.py` with OAuth 2.0 token caching ($3,600\text{s}$ buffer), HTTP session pooling, 429 `Retry-After` exponential jitter, and circuit breaking.
+  2. Implement `artist_extractor.py` (canonical entity & high-res image resolver).
+  3. Implement `album_extractor.py` (discography paginator with `limit=10` & deduplication).
+  4. Implement `track_extractor.py` (simplified track paginator with `limit=10` & FK lineage).
+  5. Build `main.py` master orchestrator injecting `snapshot_date` temporal audit watermarks.
+- **Deliverables**: ✅ Working `src/extract/` package, local immutable JSON files in `data/raw/artists/`, `data/raw/albums/`, `data/raw/tracks/`, unit tests in `tests/test_extraction.py`.
 
 ---
 
