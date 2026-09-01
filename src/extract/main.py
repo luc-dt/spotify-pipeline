@@ -1,8 +1,16 @@
 from datetime import datetime, timezone
 import json
 import os
+import sys
 import time
 from typing import Any, Dict, List, Optional
+
+# Ensure UTF-8 output encoding on Windows consoles
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 from src.extract.spotify_client import SpotifyClient
 from src.extract.artist_extractor import ArtistExtractor
@@ -150,4 +158,7 @@ def run_extraction(
     }
 
 if __name__ == "__main__":
-  run_extraction()
+    import sys
+
+    cli_artists = sys.argv[1:] if len(sys.argv) > 1 else None
+    run_extraction(target_artists=cli_artists)

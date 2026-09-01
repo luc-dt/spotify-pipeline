@@ -66,36 +66,38 @@ Persist the immutable raw JSON payloads into an **Amazon S3 Raw Data Lake** usin
 
 ---
 
-## 🗓️ Day 4: Bronze Layer with PySpark (2026-08-31)
+## 🗓️ Day 4: Bronze Layer with PySpark (2026-09-01)
 
 ### 🎯 Objective:
-Build the **Bronze Layer** processing engine with **PySpark** to ingest immutable raw JSON payloads, enforce explicit `StructType` schemas, preserve nested structures, attach technical lineage metadata (`source`, `ingestion_timestamp`), and persist **Snappy-compressed Parquet** datasets partitioned by `snapshot_date=YYYY-MM-DD/`.
+Build the **Bronze Layer** processing engine with **PySpark** to ingest immutable raw JSON payloads, enforce explicit `StructType` schemas, preserve nested structures, attach technical lineage metadata (`source`, `ingestion_timestamp`), support dynamic partition overwrite, and persist **Snappy-compressed Parquet** datasets partitioned by `snapshot_date=YYYY-MM-DD/`.
 
 ### 🧩 Work Done:
-* Built decoupled PySpark session factory in `src/transform/spark_session.py` with Windows interpreter alignment (`PYSPARK_PYTHON = sys.executable`), UTC timezone, and Snappy compression.
+* Built decoupled PySpark session factory in `src/transform/spark_session.py` with Windows interpreter alignment (`PYSPARK_PYTHON = sys.executable`), UTC timezone, Snappy compression, and **Dynamic Partition Overwrite (`spark.sql.sources.partitionOverwriteMode = dynamic`)**.
 * Defined strict `StructType` data contracts in `src/transform/schemas.py` (`RAW_ARTISTS_SCHEMA`, `RAW_ALBUMS_SCHEMA`, `RAW_TRACKS_SCHEMA`).
 * Built `src/transform/bronze_transformer.py` with `read_raw_json(multiLine=True)`, `transform_to_bronze()` (type casting, whitespace trimming, null handling, lineage stamping), and `write_bronze_parquet()`.
-* Executed end-to-end transformation on snapshot `2026-08-31` (8 artists, 741 albums, 2,500 tracks transformed in 11.88s).
-* Built validation and benchmark runner `scripts/verify_bronze.py` measuring read-back record parity and storage footprint reduction.
-* Built PySpark unit test suite `tests/test_bronze_transform.py` (5/5 tests passed in 35.04s).
+* Executed end-to-end transformation on snapshots `2026-08-31` and `2026-09-01` (totaling **8 Artists, 1,025 Albums, and 3,964 Tracks** across both daily partitions).
+* Synced all Bronze Parquet partitions to AWS S3: `s3://spotify-music-intelligence-luc/bronze/`.
+* Built PySpark unit test suite `tests/test_bronze_transformer.py` (5/5 tests passed in 49.98s).
 
 ### 📊 Storage Compression Benchmark:
-* **Raw JSON**: 1,460.1 KB across 3 datasets
-* **Bronze Snappy Parquet**: 263.1 KB across 3 partitioned tables
-* **Total Storage Savings**: **82.0% footprint reduction**
+| Entity | Raw JSON Size | Bronze Parquet (Snappy) | Storage Reduction |
+| :--- | :---: | :---: | :---: |
+| 🎵 **Tracks** | `1,089 KB` ($1.08\text{ MB}$) | **`186 KB`** | **🔥 82.8% Savings** |
+| 💿 **Albums** | `403 KB` | **`78 KB`** | **🔥 80.5% Savings** |
+| 🎤 **Artists** | `2.7 KB` | **`1.4 KB`** | **🔥 48.1% Savings** |
 
 ### 🏆 Day 4 Final Scorecard & Definition of Done:
 
 | Requirement | Implementation | Command | Status |
 | :--- | :--- | :--- | :---: |
-| **Decoupled PySpark Session** | `src/transform/spark_session.py` | `python -m src.transform.spark_session` | ✅ **DONE** |
+| **Decoupled PySpark Session** | `src/transform/spark_session.py` with dynamic partition overwrite | `python -m src.transform.spark_session` | ✅ **DONE** |
 | **Explicit StructType Contracts** | `src/transform/schemas.py` (7, 12, 11 fields) | `python -m src.transform.schemas` | ✅ **DONE** |
 | **Bronze Ingestion Transformer** | `src/transform/bronze_transformer.py` | `python -m src.transform.bronze_transformer 2026-08-31` | ✅ **DONE** |
-| **MultiLine JSON Parsing** | Read top-level JSON arrays safely with schema | `python -m src.transform.bronze_transformer 2026-08-31` | ✅ **DONE** |
-| **Lineage & Audit Metadata** | `source="spotify-web-api"`, `ingestion_timestamp=current_timestamp()` | `python -m scripts.verify_bronze` | ✅ **DONE** |
-| **Partitioned Snappy Parquet** | `data/bronze/{artists,albums,tracks}/snapshot_date=YYYY-MM-DD/` | `python -m scripts.verify_bronze` | ✅ **DONE** |
-| **Read-Back Validation** | 100% record match (8 Artists, 741 Albums, 2,500 Tracks) | `python -m scripts.verify_bronze` | ✅ **DONE** |
-| **Storage Benchmark** | Proved 82.0% storage reduction (1.46 MB $\rightarrow$ 263 KB) | `python -m scripts.verify_bronze` | ✅ **DONE** |
-| **PySpark Unit Test Suite** | 5/5 test cases in `tests/test_bronze_transform.py` passed | `pytest tests/test_bronze_transform.py -v` | ✅ **DONE** |
+| **Multi-Snapshot Execution** | Both `2026-08-31` & `2026-09-01` (3,964 tracks total) | `python -m src.transform.bronze_transformer 2026-09-01` | ✅ **DONE** |
+| **Lineage & Audit Metadata** | `source="spotify-web-api"`, `ingestion_timestamp=current_timestamp()` | `pytest tests/test_bronze_transformer.py` | ✅ **DONE** |
+| **Dynamic Partition Overwrite** | Preserves historical snapshot partitions without data loss | `python -m src.transform.bronze_transformer 2026-09-01` | ✅ **DONE** |
+| **Cloud Lakehouse Ingestion** | Synced Bronze Parquet to AWS S3 bucket | `aws s3 sync data/bronze/ s3://spotify-music-intelligence-luc/bronze/` | ✅ **DONE** |
+| **Storage Benchmark** | Proved 82.8% storage reduction (1.08 MB $\rightarrow$ 186 KB) | Verified on disk | ✅ **DONE** |
+| **PySpark Unit Test Suite** | 5/5 test cases in `tests/test_bronze_transformer.py` passed | `pytest tests/test_bronze_transformer.py -v` | ✅ **DONE** |
 
 

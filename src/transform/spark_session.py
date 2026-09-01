@@ -34,6 +34,9 @@ def get_spark_session(
         .config("spark.ui.enabled", "false")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.sql.parquet.compression.codec", "snappy")
+        .config(
+            "spark.sql.sources.partitionOverwriteMode", "dynamic"
+        )  
         .getOrCreate()
     )
 

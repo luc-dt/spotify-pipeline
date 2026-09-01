@@ -100,178 +100,313 @@ Persist the immutable raw JSON payloads into an **Amazon S3 Raw Data Lake** usin
 ---
 ---
 
-# 🗓️ Day 4 — Bronze Layer with PySpark *(Draft for Discussion)*
+# 🗓️ Day 4 — Bronze Layer with PySpark (COMPLETED)
 
-### 🎯 Proposed Objective
-
-Build the **Bronze Layer** processing engine with **PySpark** to ingest the immutable raw JSON payloads stored in S3, enforce explicit `StructType` schemas, perform **selective structural normalization**, add technical lineage metadata, and write **Snappy-compressed Parquet** datasets partitioned by `extracted_at=YYYY-MM-DD/`.
-
-The goal is not simply to convert JSON into Parquet.
-
-> **The goal is to establish a reliable, structured, query-efficient Bronze layer while preserving the meaning and provenance of the original raw data.**
+### 🎯 Day 4 Objective:
+Build the **Bronze Layer** processing engine with **PySpark** to ingest the immutable raw JSON payloads stored in S3, enforce explicit `StructType` schemas, perform selective structural normalization, add technical lineage metadata (`source`, `ingestion_timestamp`), and write **Snappy-compressed Parquet** datasets partitioned by `snapshot_date=YYYY-MM-DD/`.
 
 ---
 
-# 🏗️ Proposed Day 4 Architecture
+### 🧩 The Core Components Built:
+* `src/transform/spark_session.py`: Decoupled PySpark session factory with Dynamic Partition Overwrite.
+* `src/transform/schemas.py`: Explicit `StructType` contracts for `artists`, `albums`, `tracks`.
+* `src/transform/bronze_transformer.py`: Multi-line JSON ingestion, type casting, lineage injection, and partitioned Snappy Parquet writer.
+* `tests/test_bronze_transformer.py`: 5/5 unit tests verifying contracts, transformations, null coalescing, and Parquet read-back.
+
+---
+
+### 🏁 Day 4 Definition of Done (Verified Results):
+* ✅ Transformed multi-day snapshots (`2026-08-31` & `2026-09-01`) totaling **8 Artists, 1,025 Albums, and 3,964 Tracks** into Bronze Snappy Parquet.
+* ✅ Enabled Dynamic Partition Overwrite (`spark.sql.sources.partitionOverwriteMode=dynamic`), preserving multi-day partitions on disk and cloud.
+* ✅ Reduced storage footprint by **82.8%** on tracks (1,089 KB $\rightarrow$ 186 KB) and **80.5%** on albums (403 KB $\rightarrow$ 78 KB).
+* ✅ Synced all Bronze Parquet tables to Amazon S3 (`s3://spotify-music-intelligence-luc/bronze/`).
+* ✅ 5/5 PySpark unit tests passed in 49.98s with 100% green status.
+
+---
+---
+
+# 🗓️ Day 5: Silver Layer & Automated Data Quality Gate
+
+### 🎯 Day 5 Objective
+
+Transform the **Bronze Parquet layer** into clean, typed, deduplicated, and relationally consistent **Silver entities** using PySpark.
+
+The Silver layer will:
+* Standardize data types and dates
+* Deterministically deduplicate records
+* Preserve source-level date precision
+* Apply conservative data sanitization
+* Validate primary keys, nulls, ranges, and foreign keys
+* Quarantine invalid/orphan records instead of unnecessarily discarding valid data
+* Produce a persistent **PASS / WARN / FAIL Data Quality report**
+* Support safe, idempotent re-runs
+
+> **Bronze = structurally normalized source data.**
+> **Silver = clean and trusted entities.**
+> **Gold = business-facing analytical models and metrics.**
+
+---
+
+# 🧠 Core Philosophy
+
+The pipeline should not assume that source data is perfect.
+
+Instead:
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           AMAZON S3 RAW DATA LAKE                            │
-│                                                                             │
-│  s3://spotify-music-intelligence-luc/raw/                                 │
-│                                                                             │
-│  extracted_at=YYYY-MM-DD/                                                  │
-│  ├── artists/artists.json                                                  │
-│  ├── albums/albums.json                                                    │
-│  └── tracks/tracks.json                                                    │
-└──────────────────────────────────┬──────────────────────────────────────────┘
-                                   │
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         PYSPARK TRANSFORMATION                              │
-│                                                                             │
-│  src/transform/raw_to_bronze.py                                            │
-│                                                                             │
-│  • Read raw JSON                                                           │
-│  • Enforce explicit StructType schemas                                     │
-│  • Type casting & null handling                                            │
-│  • Selective structural normalization                                      │
-│  • Preserve nested relationships where appropriate                         │
-│  • Add technical lineage metadata                                          │
-│  • Validate transformed data                                               │
-│                                                                             │
-│  AWS Glue can later serve as the execution environment                      │
-└──────────────────────────────────┬──────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          AMAZON S3 BRONZE DATA LAKE                          │
-│                                                                             │
-│  s3://spotify-music-intelligence-luc/bronze/                               │
-│                                                                             │
-│  ├── artists/extracted_at=YYYY-MM-DD/                                      │
-│  │      └── part-*.snappy.parquet                                          │
-│  │                                                                         │
-│  ├── albums/extracted_at=YYYY-MM-DD/                                       │
-│  │      └── part-*.snappy.parquet                                          │
-│  │                                                                         │
-│  └── tracks/extracted_at=YYYY-MM-DD/                                       │
-│         └── part-*.snappy.parquet                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
+Bronze
+  ↓
+Clean + standardize
+  ↓
+Validate
+  ↓
+┌───────────────┬─────────────────┐
+│ Valid records │ Invalid records │
+│               │                 │
+▼               ▼
+Silver       Quarantine
+                │
+                ▼
+           DQ Report
+```
+
+The objective is therefore not:
+> "Reject everything that isn't perfect."
+
+It is:
+> **"Produce trustworthy Silver data while preserving visibility into data-quality problems."**
+
+---
+
+# 🏗️ Master Day 5 Architecture
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│                     BRONZE PARQUET                         │
+│                                                            │
+│ data/bronze/{artists,albums,tracks}/                       │
+│   └── snapshot_date=YYYY-MM-DD/                            │
+└──────────────────────────────┬─────────────────────────────┘
+                               │
+                               ▼
+┌────────────────────────────────────────────────────────────┐
+│                SILVER TRANSFORMATION ENGINE                │
+│                                                            │
+│  1. Deterministic deduplication                            │
+│     • PK-based Window                                      │
+│     • Keep latest extracted_at                             │
+│                                                            │
+│  2. Type & date normalization                              │
+│     • release_date → DateType                              │
+│     • preserve release_date_precision                      │
+│     • release_year / release_month / release_decade        │
+│                                                            │
+│  3. Data sanitization                                      │
+│     • trim identifiers/names                               │
+│     • standardize categorical values                        │
+│     • validate Spotify URIs                                │
+│                                                            │
+│  4. Conservative business normalization                    │
+│     • duration calculations where useful                   │
+│     • Boolean / numbering normalization                     │
+│     • no unjustified business assumptions                   │
+└──────────────────────────────┬─────────────────────────────┘
+                               │
+                               ▼
+┌────────────────────────────────────────────────────────────┐
+│                  AUTOMATED DQ GATE                         │
+│                                                            │
+│  Rule 1 → Completeness / row count                         │
+│  Rule 2 → Primary-key uniqueness                           │
+│  Rule 3 → Critical-column null checks                      │
+│  Rule 4 → Referential integrity                            │
+│  Rule 5 → Value/range validation                           │
+│                                                            │
+│                  PASS / WARN / FAIL                        │
+└──────────────────────┬─────────────────────────────────────┘
+                       │
+              ┌────────┴────────┐
+              │                 │
+          Valid data        Invalid/orphan
+              │                 │
+              ▼                 ▼
+┌──────────────────────┐   ┌──────────────────────┐
+│    SILVER LAYER      │   │     QUARANTINE       │
+│                      │   │                      │
+│ data/silver/         │   │ data/quarantine/     │
+│ {artists,albums,     │   │ {entity}/            │
+│  tracks}/             │   │ snapshot_date=.../   │
+│ snapshot_date=.../   │   │                      │
+└──────────────────────┘   └──────────────────────┘
+              │
+              │
+              ▼
+┌────────────────────────────────────────────────────────────┐
+│                  DQ REPORT / OBSERVABILITY                 │
+│                                                            │
+│ data/quality/reports/                                      │
+│   snapshot_date=YYYY-MM-DD/                                │
+│       dq_report.json                                       │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-# 📐 Proposed Bronze Schemas
+# 📐 Partitioning Convention
 
-Rather than immediately flattening everything, we define **explicit schemas based on the actual Spotify API payloads**.
+Use **`snapshot_date` consistently across Bronze and Silver**.
 
-### Artist
 ```text
-artist_id
-artist_name
-spotify_uri
-image_url
-genres
-extracted_at
-snapshot_date
-source
-ingestion_timestamp
+data/
+├── bronze/
+│   ├── artists/
+│   │   └── snapshot_date=2026-08-31/
+│   ├── albums/
+│   │   └── snapshot_date=2026-08-31/
+│   └── tracks/
+│       └── snapshot_date=2026-08-31/
+│
+└── silver/
+    ├── artists/
+    │   └── snapshot_date=2026-08-31/
+    ├── albums/
+    │   └── snapshot_date=2026-08-31/
+    └── tracks/
+        └── snapshot_date=2026-08-31/
 ```
 
-### Album
-```text
-album_id
-album_name
-album_type
-release_date
-total_tracks
-artist_id
-spotify_uri
-image_url
-extracted_at
-snapshot_date
-source
-ingestion_timestamp
-```
-
-### Track
-```text
-track_id
-track_name
-duration_ms
-explicit
-track_number
-disc_number
-album_id
-artist_id
-spotify_uri
-extracted_at
-snapshot_date
-source
-ingestion_timestamp
-```
-
-### Important Design Principle
-> **Structural normalization in Bronze; business cleaning and modeling in Silver.**
+`extracted_at` remains **event/lineage metadata**.
+`snapshot_date` identifies the logical data snapshot and is the partition key.
 
 ---
 
-# 🪜 Proposed Implementation Roadmap
+# 1️⃣ `silver_artists`
 
-### Step 1 — PySpark Environment
-Set up a reproducible PySpark environment capable of running the Bronze transformation locally (`SparkSession`, S3-compatible input/output).
+### Deduplication
+Use deterministic Window logic:
+```text
+PARTITION BY artist_id
+ORDER BY extracted_at DESC, ingestion_timestamp DESC
+```
+Keep:
+```text
+row_number() = 1
+```
 
-### Step 2 — Explicit Schema & Data Contract
-Define `StructType` schemas for `artist`, `album`, and `track` with strict data types and nullable constraints to prevent Spark from blindly inferring inconsistent schemas.
-
-### Step 3 — Raw JSON → Bronze DataFrame
-Read raw JSON, apply explicit schemas, handle nulls, add technical lineage metadata (`source`, `ingestion_timestamp`).
-
-### Step 4 — Write Bronze Parquet
-Write resulting DataFrames as Snappy-compressed Parquet partitioned by `extracted_at=YYYY-MM-DD/`.
-
-### Step 5 — Bronze Data Validation
-Validate expected columns, data types, required fields, record counts, partition directories, and read-back assertions.
-
-### Step 6 — Idempotent Re-run Test
-Run the same Bronze transformation twice for the same raw snapshot to verify that the second run does **not create duplicate logical data** (`mode("overwrite")` on the partition).
-
-### Step 7 — Compression Benchmark
-Measure and report actual storage characteristics:
-$$\text{Storage Savings} = \frac{\text{Raw JSON Size} - \text{Bronze Parquet Size}}{\text{Raw JSON Size}} \times 100\%$$
-
-### Step 8 — Unit Tests & Documentation
-Add PySpark unit tests for schemas, transformations, metadata, partitioning, and idempotency.
+### Cleaning
+* Trim `artist_id`
+* Trim `artist_name`
+* Preserve `genres` as an array (no premature `genres[0]` assumptions)
+* Validate Spotify URI structure
+* Preserve lineage metadata
 
 ---
 
-# 🎯 Day 4 Learning Outcomes
+# 2️⃣ `silver_albums`
 
-* **Data Architecture**: Understanding Medallion transitions ($\text{Raw} \rightarrow \text{Bronze} \rightarrow \text{Silver} \rightarrow \text{Gold}$).
-* **PySpark Mastery**: `SparkSession`, `StructType`, `StructField`, DataFrame transformations, Parquet serialization, Snappy compression.
-* **Data Engineering Rigor**: Schema enforcement, data contracts, lineage tracking, partition validation, idempotency, storage benchmarking.
+### Deduplication
+```text
+PARTITION BY album_id
+ORDER BY extracted_at DESC, ingestion_timestamp DESC
+```
+
+### Date normalization
+Normalize Spotify mixed dates (`2024`, `2024-04`, `2024-04-19`) into:
+```text
+release_date        → DateType (e.g. 2024-01-01 if only year given)
+release_year        → Integer (2024)
+release_month       → Integer (1)
+release_decade      → String/Integer ("2020s" / 2020)
+release_date_precision → original precision ("year")
+```
+
+### Album type
+Normalize categorical values (`album`, `single`, `compilation`) to lowercase.
 
 ---
 
-# ⚠️ Decisions for Discussion Before Implementation
+# 3️⃣ `silver_tracks`
 
-1. **Should Bronze preserve arrays such as `genres`, or normalize them?**
-   * *Consensus*: Keep as `ArrayType(StringType())` in Bronze; explode in Silver.
-2. **`extracted_at` vs `snapshot_date` representation?**
-   * *Consensus*: `extracted_at` = UTC Timestamp of extraction run; `snapshot_date` = Daily partition key (`YYYY-MM-DD`).
-3. **`source` field value?**
-   * *Consensus*: `"spotify-web-api"`.
-4. **`ingestion_timestamp` in Bronze?**
-   * *Consensus*: Yes, attach `current_timestamp()` as audit lineage.
-5. **Idempotency Strategy?**
-   * *Consensus*: `.mode("overwrite")` on the partition directory.
-6. **Compute Execution Model?**
-   * *Consensus*: Local PySpark first, cloud Glue-ready.
-7. **Dataset Separation?**
-   * *Consensus*: 3 separate Bronze tables (`artists`, `albums`, `tracks`) to prepare for Kimball Star Schema.
-8. **Schema Drift Definition?**
-   * *Consensus*: Breaking drift (missing/corrupt PKs) halts job; non-breaking drift (new optional fields) is ignored gracefully by `StructType`.
-9. **Testing Scope?**
-   * *Consensus*: Schema contract + partition directory + record count match + Parquet read-back.
+### Deduplication
+```text
+PARTITION BY track_id
+ORDER BY extracted_at DESC, ingestion_timestamp DESC
+```
+
+### Duration & Numbering
+* Derive `duration_min = round(duration_ms / 60000.0, 2)`
+* Derive `duration_sec = round(duration_ms / 1000.0, 1)`
+* Validate `disc_number >= 1`, `track_number >= 1`
+* Enforce `explicit` as BooleanType
+
+---
+
+# 🛡️ Automated Data Quality Framework
+
+Reusable engine in `src/quality/data_quality.py` with `DataQualityChecker`.
+
+## DQ Rules
+
+| # | Check | Logic | Severity |
+| :--- | :--- | :--- | :---: |
+| **1** | **Completeness** | Row count > 0 | FAIL |
+| **2** | **PK Uniqueness** | No duplicate primary keys | FAIL |
+| **3** | **Critical Nulls** | PK and Name fields not null | FAIL |
+| **4** | **FK Integrity** | Left-anti join: Detect orphan relationships | WARN / FAIL |
+| **5** | **Range Validation** | Valid duration / date / number ranges | FAIL |
+
+### Referential Integrity Threshold
+* **0%–5% orphan rate**: **WARN** $\rightarrow$ Quarantine orphan records, write valid records to Silver.
+* **>5% orphan rate**: **FAIL** $\rightarrow$ Block Silver write, persist DQ report.
+
+---
+
+# 🚧 Quarantine & DQ Report
+
+* **Quarantine Path**: `data/quarantine/{entity}/snapshot_date=YYYY-MM-DD/` with `dq_reason`, `dq_rule`, `snapshot_date`.
+* **DQ Report Path**: `data/quality/reports/snapshot_date=YYYY-MM-DD/dq_report.json`.
+
+---
+
+# 📁 Final Day 5 Project Structure
+
+```text
+spotify-pipeline/
+│
+├── src/
+│   ├── transform/
+│   │   ├── spark_session.py
+│   │   ├── schemas.py
+│   │   ├── bronze_transformer.py
+│   │   └── silver_transformer.py
+│   │
+│   └── quality/
+│       └── data_quality.py
+│
+├── scripts/
+│   ├── verify_bronze.py
+│   └── run_silver.py
+│
+├── tests/
+│   ├── test_bronze_transform.py
+│   ├── test_silver_transform.py
+│   └── test_data_quality.py
+│
+└── data/
+    ├── raw/
+    ├── bronze/
+    ├── silver/
+    ├── quarantine/
+    └── quality/
+        └── reports/
+```
+
+---
+
+## 🏁 Day 5 Success Criteria
+
+1. ✅ `src/quality/data_quality.py` with 5 validation rules, quarantine routing, and JSON reporting.
+2. ✅ `src/transform/silver_transformer.py` with Window deduplication, date normalization, and duration derivation.
+3. ✅ Persistent `data/silver/`, `data/quarantine/`, and `data/quality/reports/` for snapshot `2026-08-31`.
+4. ✅ Test suites in `tests/test_data_quality.py` and `tests/test_silver_transform.py` passing with 100% green status.
+

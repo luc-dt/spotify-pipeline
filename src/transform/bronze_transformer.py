@@ -183,6 +183,7 @@ class BronzeTransformer:
     def write_bronze_parquet(self, df: DataFrame, entity: str) -> str:
         """Writes DataFrame as Snappy-compressed Parquet partitioned by snapshot_date."""
         output_path = os.path.join(self.bronze_base_dir, entity)
+        
         (
             df.write
             .mode("overwrite")

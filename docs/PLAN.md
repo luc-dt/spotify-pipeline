@@ -75,7 +75,7 @@ The **Spotify Music Intelligence Platform** is an enterprise-grade cloud data pl
 | **Day 1**  | **API Audit & Project Setup**  | ✅ **DONE** — Verified 2026 Spotify endpoints, live OAuth 2.0 flow, and schema contract | ⭐⭐⭐⭐⭐ |
 | **Day 2**  | **Python Extraction Engine**   | ✅ **DONE** — `src/extract/` package (Token caching, 429 backoff, paginators, `data/raw/` JSON) | ⭐⭐⭐⭐⭐ |
 | **Day 3**  | **AWS S3 Raw Data Lake**       | ✅ **DONE** — `src/storage/s3_uploader.py`, Hive partitioning, SSE-S3 AES-256, 8 unit tests |  ⭐⭐⭐⭐  |
-| **Day 4**  | **Bronze Layer (PySpark)**     | ✅ **DONE** — StructType schemas, multiLine JSON, Snappy Parquet, 82.0% storage savings | ⭐⭐⭐⭐⭐ |
+| **Day 4**  | **Bronze Layer (PySpark)**     | ✅ **DONE** — `src/transform/bronze_transformer.py`, StructType schemas, Snappy Parquet, 82% compression | ⭐⭐⭐⭐⭐ |
 | **Day 5**  | **Silver Layer & DQ Gate**     | Cleaning, deduplication, automated Data Quality validation checks                       | ⭐⭐⭐⭐⭐ |
 | **Day 6**  | **Gold Layer & Snapshots**     | Star Schema dimensions & `fact_artist_snapshot` historical tracking                     | ⭐⭐⭐⭐⭐ |
 | **Day 7**  | **Business Analytics (SQL)**   | 10–15 core ANSI SQL queries (Catalog growth, release velocity, momentum)                | ⭐⭐⭐⭐⭐ |
