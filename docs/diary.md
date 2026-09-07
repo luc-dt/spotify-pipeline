@@ -100,4 +100,52 @@ Build the **Bronze Layer** processing engine with **PySpark** to ingest immutabl
 | **Storage Benchmark** | Proved 82.8% storage reduction (1.08 MB $\rightarrow$ 186 KB) | Verified on disk | ✅ **DONE** |
 | **PySpark Unit Test Suite** | 5/5 test cases in `tests/test_bronze_transformer.py` passed | `pytest tests/test_bronze_transformer.py -v` | ✅ **DONE** |
 
+---
 
+## 🗓️ Day 5: Silver Layer & Automated Data Quality Gate (2026-09-07)
+
+### 🎯 Objective:
+Transform the Bronze Parquet layer into clean, typed, deterministically deduplicated, and relationally consistent Silver entities using PySpark, enforced by an Automated Data Quality Gate and Quarantine routing.
+
+### 🧩 Work Done:
+* **Silver Transformation Engine (`src/transform/silver_transformer.py`)**:
+  * Implemented deterministic PySpark Window deduplication (`row_number() over (PARTITION BY id ORDER BY extracted_at DESC, ingestion_timestamp DESC)`), keeping strictly latest record (`row_number() == 1`).
+  * Normalized mixed Spotify release dates (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`) into `DateType`, deriving `release_year`, `release_month`, and `release_decade` while preserving original `release_date_precision`.
+  * Derived track metrics (`duration_min`, `duration_sec`), cast booleans/integers, and stamped `silver_transformed_at` audit lineage.
+* **Automated Data Quality Gate (`src/quality/data_quality.py`)**:
+  * Built `DataQualityChecker` enforcing 5 core validation rules: Completeness, Primary Key Uniqueness, Critical Column Nulls (single-pass aggregation), Referential Integrity (distributed `left_anti` joins), and Value/Range Validation.
+  * Configured threshold-based severity for orphan relationships (0% PASS, $\le 5\%$ WARN, $>5\%$ FAIL).
+  * Built quarantine routing for anomalies (`data/quarantine/{entity}/`) and audit-ready observability reporting (`data/quality/reports/snapshot_date=YYYY-MM-DD/dq_report.json`).
+* **Master Orchestrator (`scripts/run_silver.py`)**:
+  * Built CLI runner orchestrating Bronze read $\rightarrow$ Silver transform $\rightarrow$ DQ evaluation $\rightarrow$ Quarantine routing $\rightarrow$ Silver write $\rightarrow$ DQ report emission.
+* **Execution & Verification**:
+  * Executed end-to-end pipeline across snapshots `2026-08-31` and `2026-09-01`.
+  * Deduplicated 14 duplicate albums and 9 duplicate tracks across historical snapshots.
+  * Verified 100% PASS rate across all 13 DQ checks with persistent JSON reports.
+* **Test Suite**:
+  * Verified 18/18 PySpark unit tests passing with 100% green status across `tests/test_silver_transformer.py` and `tests/test_data_quality.py`.
+
+### 📊 Silver Ingestion & Deduplication Audit:
+| Snapshot Date | Entity | Bronze Rows | Conformed Silver Rows | Duplicates Collapsed | DQ Status |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **2026-08-31** | 🎤 Artists | 8 | 8 | 0 | ✅ PASS (100%) |
+| **2026-08-31** | 💿 Albums | 741 | **732** | **9** | ✅ PASS (100%) |
+| **2026-08-31** | 🎵 Tracks | 2,500 | **2,499** | **1** | ✅ PASS (100%) |
+| **2026-09-01** | 🎤 Artists | 3 | 3 | 0 | ✅ PASS (100%) |
+| **2026-09-01** | 💿 Albums | 284 | **279** | **5** | ✅ PASS (100%) |
+| **2026-09-01** | 🎵 Tracks | 1,464 | **1,456** | **8** | ✅ PASS (100%) |
+
+### 🏆 Day 5 Final Scorecard & Definition of Done:
+
+| Requirement | Implementation | Command | Status |
+| :--- | :--- | :--- | :---: |
+| **Silver Transformation Engine** | `src/transform/silver_transformer.py` | `python scripts/run_silver.py --snapshot-date 2026-08-31` | ✅ **DONE** |
+| **Window Deduplication** | `row_number() == 1` over PK ordering by latest extraction | Verified in `tests/test_silver_transformer.py` | ✅ **DONE** |
+| **Mixed Date Normalization** | Year/Month/Day standardization to `DateType` + derived decades | Verified in `tests/test_silver_transformer.py` | ✅ **DONE** |
+| **Automated DQ Gate** | 5 core rules in `src/quality/data_quality.py` | `pytest tests/test_data_quality.py -v` | ✅ **DONE** |
+| **Referential Integrity Engine** | Left-Anti join orphan detection with threshold gating | Evaluated in `scripts/run_silver.py` | ✅ **DONE** |
+| **Quarantine Routing** | Lineage stamping and writing to `data/quarantine/{entity}/` | Verified in unit tests & runner script | ✅ **DONE** |
+| **DQ Observability Reports** | JSON audit report exported to `data/quality/reports/` | Verified on disk for both snapshots | ✅ **DONE** |
+| **Multi-Snapshot Execution** | Executed across both `2026-08-31` and `2026-09-01` | `python scripts/run_silver.py --all` | ✅ **DONE** |
+| **Dynamic Partition Overwrite** | Preserves historical partitions without data corruption | Verified via `ls -la data/silver/{entity}/` | ✅ **DONE** |
+| **PySpark Test Suite** | 18/18 tests passed across 2 test suites | `pytest tests/test_silver_transformer.py tests/test_data_quality.py -v` | ✅ **DONE** |

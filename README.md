@@ -333,12 +333,21 @@ python scripts/test_spotify_auth.py
 
 # 6. Run Ingestion Engine (Extracts sample catalog)
 python -m src.extract.main
+
+# 7. Run Bronze Layer Transformation (PySpark)
+python -m src.transform.bronze_transformer 2026-08-31
+
+# 8. Run Silver Layer Transformation & Automated Data Quality Gate
+python scripts/run_silver.py --all
+
+# 9. Run PySpark Unit & Integration Tests (18 tests)
+pytest tests/ -v
 ```
 
 ### 3. Full Pipeline Setup (Production Orchestration Scope)
 
 > [!NOTE]
-> Full automated orchestration (Airflow DAG + PySpark Medallion Jobs + Streamlit BI Portal) will be incrementally unlocked as roadmap stages 2–10 are completed. See the [Roadmap](#conclusion--roadmap) below.
+> Full automated orchestration (Airflow DAG + PySpark Medallion Jobs + Streamlit BI Portal) will be incrementally unlocked as roadmap stages 6–10 are completed. See the [Roadmap](#conclusion--roadmap) below.
 
 ```bash
 # Launch full local stack (Airflow + Postgres + Streamlit)
@@ -367,7 +376,7 @@ docker-compose up -d
 - [x] **Day 2: Python Extraction Engine** (Modular extractors in `src/extract/` — 8 Artists, 741 Albums, 2.5K Tracks)
 - [x] **Day 3: AWS S3 Raw Data Lake** (Partitioned S3 storage `extracted_at=...`, AES-256 encryption, 8 unit tests)
 - [x] **Day 4: Bronze Layer (PySpark)** (StructType schemas, multiLine JSON, Snappy Parquet, 82.0% compression, 5 unit tests)
-- [ ] **Day 5: Silver Layer & Data Quality** (Deduplication, cleaning & automated assertions)
+- [x] **Day 5: Silver Layer & Data Quality** (Window deduplication, date normalization, automated 5-rule DQ gate, quarantine routing, 18 unit tests)
 - [ ] **Day 6: Gold Layer & Snapshots** (Star Schema & `fact_artist_snapshot`)
 - [ ] **Day 7: Business Analytics (SQL)** (10–15 analytical business queries)
 - [ ] **Day 8: Airflow Orchestration** (End-to-end DAG & incremental loading)
@@ -379,7 +388,7 @@ docker-compose up -d
 # Repository Structure
 
 ```text
-end-to-end-spotify-pipeline/
+spotify-pipeline/
 ├── src/
 │   ├── extract/                 # API client, artist/album/track extractors
 │   │   ├── spotify_client.py
@@ -387,14 +396,34 @@ end-to-end-spotify-pipeline/
 │   │   ├── album_extractor.py
 │   │   ├── track_extractor.py
 │   │   └── main.py
-│   ├── transform/               # PySpark Medallion ETL (Bronze -> Silver -> Gold)
-│   └── utils/                   # Logging, configuration, and helpers
-├── dags/                        # Apache Airflow DAG definitions
-├── data/raw/                    # Local raw partitioned JSON (Bronze)
-├── sql/                         # Analytical business SQL queries
-├── streamlit/                   # Streamlit intelligence application
-├── tests/                       # Automated pytest & data quality test suite
-├── docs/                        # BRD, API specifications, and roadmap
+│   ├── transform/               # PySpark Bronze & Silver transformers
+│   │   ├── spark_session.py     # Decoupled SparkSession factory
+│   │   ├── schemas.py           # StructType data contracts
+│   │   ├── bronze_transformer.py# Raw JSON -> Bronze Snappy Parquet
+│   │   └── silver_transformer.py# Bronze -> Conformed Silver with Window deduplication
+│   ├── quality/                 # Automated Data Quality Gate
+│   │   └── data_quality.py      # 5 validation rules, quarantine routing & JSON reporting
+│   └── storage/                 # AWS S3 Boto3 lakehouse ingestion
+│       └── s3_uploader.py
+├── scripts/                     # Operational verification & runner CLI scripts
+│   ├── test_spotify_auth.py
+│   ├── verify_aws_credentials.py
+│   ├── verify_bronze.py
+│   └── run_silver.py            # Master Silver & DQ orchestration runner
+├── tests/                       # Pytest unit & integration test suites (18 tests)
+│   ├── test_s3_uploader.py
+│   ├── test_bronze_transformer.py
+│   ├── test_silver_transformer.py
+│   └── test_data_quality.py
+├── data/                        # Local Medallion data storage (Parquet/JSON)
+│   ├── raw/
+│   ├── bronze/
+│   ├── silver/
+│   └── quality/reports/
+├── docs/                        # Engineering diary, BRD, questions & implementation plans
+│   ├── diary.md
+│   ├── questions.md
+│   └── implementation_plan.md
 ├── requirements.txt             # Python dependencies
 ├── .env.example                 # Environment configuration template
 └── README.md
