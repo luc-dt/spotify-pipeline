@@ -165,15 +165,24 @@ The **Spotify Music Intelligence Platform** is an enterprise-grade cloud data pl
 
 ---
 
-### 🗓️ Day 7 — Business Analytics & SQL Marts
+### 🗓️ Day 7 — Business Analytics & SQL Marts ✅ (COMPLETED)
 
-- **Goal**: Formulate high-value commercial SQL queries answering executive questions:
-  1. **Top Active Artists**: Who released the most albums/singles over the last 12 months?
-  2. **Catalog Growth Velocity**: Which artists expanded their track catalog the fastest?
-  3. **Release Seasonality**: Monthly distribution of album vs single drops.
-  4. **Artist Catalog Momentum Index**: Composite weighted score (`40% Recent Release Activity + 35% Catalog Growth + 25% Release Cadence`).
-- **Initial Step**: Ingest BTS for snapshot `2026-09-01` once 24h Spotify quota resets, completing the full 8-artist × 2-snapshot balanced matrix (16 fact rows).
-- **Deliverable**: `sql/analytics_queries.sql` (10–15 optimized Athena/DuckDB queries).
+- **Goal**: Formulate high-value commercial SQL queries answering executive questions and build curated analytical data marts.
+- **Completed Components**:
+  1. **In-Process Semantic Layer**: `sql/setup_gold_views.sql` (5 Gold DuckDB views with zero copy overhead).
+  2. **8 Commercial Analytics Queries**: `sql/analytics_queries.sql` + `scripts/run_analytics.py`:
+     - §1: Fact Sanity & Referential Integrity Audit (0 orphan keys).
+     - §2: Activity & Production Mix (Q1: Rolling 12m Volume, Q2: Single-to-Album Strategy).
+     - §3: Catalog Growth Dynamics (Q3: Growth Velocity %, Q4: Net Track Additions).
+     - §4: Release Seasonality (Q5: Monthly Format Distribution, Q6: Artist Peak Drop Months).
+     - §5: Momentum Trajectory (Q7: Momentum Leaderboard & Tiers, Q8: Snapshot-over-Snapshot Delta).
+  3. **4 Curated Data Marts**: `sql/marts/*.sql` + `sql/setup_marts.sql` + `scripts/test_marts.py`:
+     - `mart_artist_activity` (powers Streamlit Page 1 & Page 4).
+     - `mart_catalog_growth` (powers Streamlit Page 1 & Page 2).
+     - `mart_release_seasonality` (powers Streamlit Page 4).
+     - `mart_artist_momentum` (powers Streamlit Page 1 & Page 2).
+  4. **Executive Documentation**: `docs/day7_business_questions.md`.
+- **Note on BTS Ingestion**: BTS backfill for `2026-09-01` scheduled once 24h Spotify API quota window resets.
 
 ---
 

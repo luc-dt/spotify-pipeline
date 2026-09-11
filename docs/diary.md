@@ -300,3 +300,83 @@ Design, build, and validate the **Gold Dimensional Layer** adhering strictly to 
 | **Automated PySpark Test Suite** | 8/8 test cases passing dynamically | `pytest tests/test_gold_transformer.py -v` | ✅ **DONE** |
 | **Master Gold Orchestrator** | CLI runner with logging, formatting, and S3 sync | `scripts/run_gold.py` | ✅ **DONE** |
 | **AWS S3 Synchronization** | Sync Gold Parquet store to AWS Lakehouse | `python scripts/run_gold.py --sync-s3` | ✅ **DONE** |
+
+---
+
+## 🗓️ Day 7: Business Analytics & SQL Marts with DuckDB (2026-09-11)
+
+### 🎯 Objective:
+
+Transition from the Kimball Gold Parquet warehouse layer into high-value commercial SQL analytics and curated data marts using an in-process, vectorized **DuckDB OLAP engine**. Formulate and test 8 core executive business queries and 4 purpose-built analytical data marts designed to directly power the Day 9 Streamlit Intelligence application.
+
+### 🏗️ Semantic OLAP Layer Architecture:
+
+```text
+  📁 data/gold/ (Local & S3 Snappy Parquet)
+  ├── dim_date/                    (29,585 rows)
+  ├── dim_artist/                  (8 rows)
+  ├── dim_album/                   (732 rows)
+  ├── dim_track/                   (3,837 rows)
+  └── fact_artist_snapshot/        (15 rows, Hive Partitioned)
+                     │
+                     ▼
+          🦆 DuckDB In-Process OLAP
+       (Vectorized C++ columnar execution)
+                     │
+    ┌────────────────┴────────────────┐
+    ▼                                 ▼
+ 🔍 8 Production SQL Queries     🏪 4 Curated Data Marts
+ (sql/analytics_queries.sql)     (sql/setup_marts.sql)
+    │                                 │
+    ▼                                 ▼
+ 📊 Ad-Hoc Analytics & Reporting  🚀 Day 9 Streamlit UI
+```
+
+### 🧠 Core Architectural Decisions & Lessons Learned:
+
+1. **In-Process Vectorized OLAP vs. Cloud Data Warehouse (FinOps & Latency)**:
+   - Evaluated spinning up an always-on cloud warehouse (Snowflake/Redshift) or paying \$5.00/TB on AWS Athena.
+   - Adopted **DuckDB**: executes in-process in C++ within the Python runtime (`duckdb.connect()`), achieving **$<10\text{ms}$ query latency** directly over local Snappy Parquet files with **$0 infrastructure spend**.
+2. **Option A: Streamlined 8-Query Commercial Suite**:
+   - Dropped the redundant math formula recalculation query to strictly adhere to the DRY principle with PySpark.
+   - Q7 directly serves the 3 underlying pillars (`recent_releases_12m`, `median_release_cadence_days`, `catalog_growth_pct`), and promoted snapshot-over-snapshot momentum delta to Q8.
+3. **Analytic Window Functions over Self-Joins**:
+   - Replaced quadratic $O(N^2)$ fact table self-joins with linear $O(N \log N)$ `LAG()` and `DENSE_RANK()` window functions partitioned by `artist_key` and ordered by `snapshot_date`.
+4. **4 Purpose-Built Data Marts for Day 9 Streamlit**:
+   - `mart_artist_activity` $\rightarrow$ Powers Streamlit Page 1 (Overview) & Page 4 (Trends).
+   - `mart_catalog_growth` $\rightarrow$ Powers Streamlit Page 1 (Overview) & Page 2 (Artist 360).
+   - `mart_release_seasonality` $\rightarrow$ Powers Streamlit Page 4 (Catalog Trends & Seasonality).
+   - `mart_artist_momentum` $\rightarrow$ Powers Streamlit Page 1 (Overview) & Page 2 (Momentum).
+5. **Virtual Data Marts over Materialized Tables**:
+   - Implemented marts as SQL views directly over the Gold semantic views, eliminating storage duplication while ensuring real-time consistency with the underlying Parquet files.
+
+---
+
+### 📊 Verified Analytics Results & Business Insights:
+
+- **Referential Integrity**: 0 orphan artist keys across both `2026-08-31` (8 artists) and `2026-09-01` (7 artists) snapshots.
+- **Top Active Artist (Q1)**: **Taylor Swift** ranked #1 with **14 drops** over the rolling 12 months, followed by **Ed Sheeran** (#2, 7 drops) and **Ariana Grande** (#3, 6 drops).
+- **Catalog Strategy Archetype (Q2)**: **Billie Eilish** exhibited a **9.67 single-to-album ratio** (90.6% singles $\rightarrow$ *Single-Dominant / Streaming-First*), while **Taylor Swift** maintained a **Balanced Hybrid model** (2.36 ratio, ~30% full studio LPs).
+- **Catalog Growth Dynamics (Q3 & Q4)**: **Coldplay** was the sole active expanding artist on `2026-09-01`, adding **+8 net tracks** (+1.97% catalog growth). All other 6 artists showed 0.00% (*Static Catalog*).
+- **Macro Release Seasonality (Q5)**: **July and November** tied for peak drops (84 releases each), but represented polar opposite strategies: July was **90.5% singles** (summer streaming rush), while November featured **22 studio albums** (Q4 holiday sales & Grammy deadline).
+- **Artist Drop Month Preferences (Q6)**: Taylor Swift and Coldplay peak in November; BTS peaks in June (20.7% concentration, Festa anniversary); Drake and Billie Eilish peak in July.
+- **Catalog Momentum Leaderboard (Q7)**: Taylor Swift #1 (**80.20** - *Elite Velocity*), Ed Sheeran #2 (**70.50** - *High Momentum*), Ariana Grande #3 (**62.57** - *High Momentum*).
+- **Momentum Trajectory Delta (Q8)**: Coldplay registered **+3.99 momentum acceleration** (40.06 $\rightarrow$ 44.05, *Surging (+)*) due to the +8 track expansion.
+
+---
+
+### 🏆 Day 7 Final Scorecard & Definition of Done:
+
+| Requirement | Implementation | Command / File | Status |
+|---|---|---|:---:|
+| **Semantic Gold Layer Views** | 5 DuckDB views with Hive partition reading | `sql/setup_gold_views.sql` | ✅ **DONE** |
+| **Gold Views Automated Test** | Verification script validating all 5 views | `python scripts/test_gold_views.py` | ✅ **DONE** |
+| **8 Commercial SQL Queries** | ANSI SQL queries answering executive questions | `sql/analytics_queries.sql` | ✅ **DONE** |
+| **Analytics Execution Engine** | Python DuckDB runner executing all 5 sections | `python scripts/run_analytics.py` | ✅ **DONE** |
+| **4 Curated Data Marts** | Individual DDL views for activity, growth, seasonality, momentum | `sql/marts/*.sql` | ✅ **DONE** |
+| **Master Marts Setup Script** | Unified DDL script establishing all 4 marts | `sql/setup_marts.sql` | ✅ **DONE** |
+| **Automated Marts Test Harness** | Test script asserting row/column schemas and sample outputs | `python scripts/test_marts.py` | ✅ **DONE** |
+| **Executive Business Documentation** | Full data catalog with commercial rationales and insights | `docs/day7_business_questions.md` | ✅ **DONE** |
+| **Interview Question Bank (Q20–Q24)** | 5 deep-dive interview questions on DuckDB, Marts & Windowing | `docs/questions.md` | ✅ **DONE** |
+| **Roadmap Alignment** | Updated milestone tracker | `docs/PLAN.md` | ✅ **DONE** |
+
