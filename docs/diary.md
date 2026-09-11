@@ -275,10 +275,16 @@ Design, build, and validate the **Gold Dimensional Layer** adhering strictly to 
 | Table | Type | Grain | Row Count | Primary Key | Format |
 |---|---|---|:---:|---|---|
 | **`dim_date`** | Conformed Dimension | 1 calendar day | **29,585** | `date_key` (19500101 – 20301231) | Snappy Parquet |
-| **`dim_artist`** | Conformed Dimension | 1 artist (SCD Type 1) | **5** | `artist_key` (MD5 hex) | Snappy Parquet |
-| **`dim_album`** | Conformed Dimension | 1 album | **456** | `album_key` (MD5 hex) | Snappy Parquet |
-| **`dim_track`** | Conformed Dimension | 1 track | **2,386** | `track_key` (MD5 hex) | Snappy Parquet |
-| **`fact_artist_snapshot`** | Periodic Snapshot Fact | 1 artist per snapshot date | **10** (5 × 2 dates) | `(artist_key, date_key)` | Partitioned Parquet |
+| **`dim_artist`** | Conformed Dimension | 1 artist (SCD Type 1) | **8** | `artist_key` (MD5 hex) | Snappy Parquet |
+| **`dim_album`** | Conformed Dimension | 1 album | **732** | `album_key` (MD5 hex) | Snappy Parquet |
+| **`dim_track`** | Conformed Dimension | 1 track | **3,837** | `track_key` (MD5 hex) | Snappy Parquet |
+| **`fact_artist_snapshot`** | Periodic Snapshot Fact | 1 artist per snapshot date | **15** (8 on 08-31, 7 on 09-01) | `(artist_key, date_key)` | Partitioned Parquet |
+
+> [!NOTE]
+> **Cohort Expansion & Real Catalog Growth**:
+> - Re-running the pipeline with live extractions for **Ariana Grande** and **Coldplay** successfully expanded `dim_artist` to 8 entities and `fact_artist_snapshot` to 15 rows.
+> - **Real Growth Detected**: Coldplay grew from 406 tracks on `2026-08-31` to 414 tracks on `2026-09-01` (`+1.97%` growth), boosting their momentum index from **40.06** to **44.05**.
+> - **BTS Backfill Planned for Tomorrow**: Due to the 24-hour Spotify Development Mode quota limit, BTS was extracted for `2026-08-31` but pending for `2026-09-01`. BTS will be extracted tomorrow once the quota window resets, bringing the final fact count to $8 \times 2 = 16$ rows.
 
 ### 🏆 Day 6 Final Scorecard & Definition of Done:
 
@@ -288,9 +294,9 @@ Design, build, and validate the **Gold Dimensional Layer** adhering strictly to 
 | **Metric Formulation & Math** | Kimball classification & formula specifications | `docs/metric_definitions.md` | ✅ **DONE** |
 | **Gold Transformation Engine** | Modular PySpark engine for 4 dimensions + 1 fact | `src/transform/gold_transformer.py` | ✅ **DONE** |
 | **Native Cadence Windowing** | Option A pure Spark windowing (`percentile_approx`) | `src/transform/gold_transformer.py` | ✅ **DONE** |
-| **First Snapshot NULL Invariant** | Strictly `NULL` on baseline, `0.0%` on clone | Verified in `tests/test_gold_transformer.py` | ✅ **DONE** |
+| **First Snapshot NULL Invariant** | Strictly `NULL` on baseline, dynamic growth on recurrence | Verified in `tests/test_gold_transformer.py` | ✅ **DONE** |
 | **Metric Boundary Guarantees** | Counters $\ge 0$, Momentum index $\in [0.0, 100.0]$ | Verified in `tests/test_gold_transformer.py` | ✅ **DONE** |
 | **Referential Integrity** | Zero orphan foreign keys across all star schema joins | Verified in `tests/test_gold_transformer.py` | ✅ **DONE** |
-| **Automated PySpark Test Suite** | 8/8 test cases passed in 22.53s | `pytest tests/test_gold_transformer.py -v` | ✅ **DONE** |
+| **Automated PySpark Test Suite** | 8/8 test cases passing dynamically | `pytest tests/test_gold_transformer.py -v` | ✅ **DONE** |
 | **Master Gold Orchestrator** | CLI runner with logging, formatting, and S3 sync | `scripts/run_gold.py` | ✅ **DONE** |
 | **AWS S3 Synchronization** | Sync Gold Parquet store to AWS Lakehouse | `python scripts/run_gold.py --sync-s3` | ✅ **DONE** |

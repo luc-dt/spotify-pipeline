@@ -172,6 +172,7 @@ The **Spotify Music Intelligence Platform** is an enterprise-grade cloud data pl
   2. **Catalog Growth Velocity**: Which artists expanded their track catalog the fastest?
   3. **Release Seasonality**: Monthly distribution of album vs single drops.
   4. **Artist Catalog Momentum Index**: Composite weighted score (`40% Recent Release Activity + 35% Catalog Growth + 25% Release Cadence`).
+- **Initial Step**: Ingest BTS for snapshot `2026-09-01` once 24h Spotify quota resets, completing the full 8-artist × 2-snapshot balanced matrix (16 fact rows).
 - **Deliverable**: `sql/analytics_queries.sql` (10–15 optimized Athena/DuckDB queries).
 
 ---
