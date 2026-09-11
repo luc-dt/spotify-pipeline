@@ -76,8 +76,8 @@ The **Spotify Music Intelligence Platform** is an enterprise-grade cloud data pl
 | **Day 2**  | **Python Extraction Engine**   | ✅ **DONE** — `src/extract/` package (Token caching, 429 backoff, paginators, `data/raw/` JSON) | ⭐⭐⭐⭐⭐ |
 | **Day 3**  | **AWS S3 Raw Data Lake**       | ✅ **DONE** — `src/storage/s3_uploader.py`, Hive partitioning, SSE-S3 AES-256, 8 unit tests |  ⭐⭐⭐⭐  |
 | **Day 4**  | **Bronze Layer (PySpark)**     | ✅ **DONE** — `src/transform/bronze_transformer.py`, StructType schemas, Snappy Parquet, 82% compression | ⭐⭐⭐⭐⭐ |
-| **Day 5**  | **Silver Layer & DQ Gate**     | Cleaning, deduplication, automated Data Quality validation checks                       | ⭐⭐⭐⭐⭐ |
-| **Day 6**  | **Gold Layer & Snapshots**     | Star Schema dimensions & `fact_artist_snapshot` historical tracking                     | ⭐⭐⭐⭐⭐ |
+| **Day 5**  | **Silver Layer & DQ Gate**     | ✅ **DONE** — `silver_transformer.py`, window deduplication, date normalization, DQ gate (13/13 pass) | ⭐⭐⭐⭐⭐ |
+| **Day 6**  | **Gold Layer & Snapshots**     | ✅ **DONE** — Kimball Star Schema (4 dims, `fact_artist_snapshot`), native cadence windowing, 8/8 tests pass | ⭐⭐⭐⭐⭐ |
 | **Day 7**  | **Business Analytics (SQL)**   | 10–15 core ANSI SQL queries (Catalog growth, release velocity, momentum)                | ⭐⭐⭐⭐⭐ |
 | **Day 8**  | **Airflow Orchestration**      | End-to-end Airflow DAG, retries, sensors, idempotent incremental logic                  | ⭐⭐⭐⭐⭐ |
 | **Day 9**  | **Streamlit Intelligence App** | 4-page interactive UI (Executive Overview, Artist 360, Catalog Trends)                  | ⭐⭐⭐⭐⭐ |
@@ -144,13 +144,24 @@ The **Spotify Music Intelligence Platform** is an enterprise-grade cloud data pl
 
 ---
 
-### 🗓️ Day 6 — Gold Dimensional Model & Historical Snapshots
+### 🗓️ Day 6 — Gold Dimensional Model & Historical Snapshots (Kimball Star Schema)
 
-- **Goal**: Build the analytical data warehouse star schema.
-- **Architecture**:
-  - **Dimensions**: `dim_artist`, `dim_album`, `dim_track`, `dim_date`.
-  - **Facts (Snapshots)**: `fact_artist_snapshot`, `fact_album_snapshot`, `fact_track_snapshot`.
-- **Key DE Concept**: `snapshot_date` tracking to measure catalog growth, release frequency, and artist trajectory over time.
+- **Goal**: Transform trusted Silver entities into an analytical Kimball Star Schema optimized for OLAP query engines (Athena/DuckDB) and dashboard visualization.
+- **Frozen Architecture**:
+  - **Dimensions (Conformed)**:
+    - `dim_artist`: Unique artist profiles, genres, Spotify URIs, surrogate PK `artist_key`.
+    - `dim_album`: Discography metadata, release date hierarchies, surrogate PK `album_key`.
+    - `dim_track`: Track audio metadata, duration, explicit flags, surrogate PK `track_key`.
+    - `dim_date`: Gregorian calendar dimension (1950–2030) with smart integer PK `date_key` (`YYYYMMDD`).
+  - **Periodic Snapshot Fact**:
+    - `fact_artist_snapshot`: Grain `(artist_key, date_key)` capturing state, cadence, and momentum at uniform extraction points.
+- **Key DE Concepts & Rules**:
+  - **Semi-Additive Counters**: `total_albums`, `total_tracks`, `total_singles`, `recent_releases_12m`.
+  - **Non-Additive Metrics**: `median_release_cadence_days` (statistical summary), `catalog_growth_pct` (rate), `catalog_momentum_index` (score).
+  - **First-Snapshot Growth Rule**: `catalog_growth_pct = NULL` on initial baseline (not `0%`).
+  - **Bounded Momentum Index**: Calibrated composite score $[0.0, 100.0]$ measuring publishing velocity and pacing.
+  - **Dynamic Partition Overwrite**: Safe, idempotent appends to `data/gold/fact_artist_snapshot/snapshot_date=YYYY-MM-DD/`.
+- **Deliverables**: `docs/gold_schema.md`, `docs/metric_definitions.md`, `src/transform/gold_transformer.py`, `scripts/run_gold.py`, `tests/test_gold_transformer.py`, `data/gold/`, and S3 sync.
 
 ---
 
@@ -160,7 +171,7 @@ The **Spotify Music Intelligence Platform** is an enterprise-grade cloud data pl
   1. **Top Active Artists**: Who released the most albums/singles over the last 12 months?
   2. **Catalog Growth Velocity**: Which artists expanded their track catalog the fastest?
   3. **Release Seasonality**: Monthly distribution of album vs single drops.
-  4. **Artist Catalog Momentum Index**: Composite weighted score (`40% Catalog Growth + 30% Recent Release Activity + 30% Release Frequency`).
+  4. **Artist Catalog Momentum Index**: Composite weighted score (`40% Recent Release Activity + 35% Catalog Growth + 25% Release Cadence`).
 - **Deliverable**: `sql/analytics_queries.sql` (10–15 optimized Athena/DuckDB queries).
 
 ---

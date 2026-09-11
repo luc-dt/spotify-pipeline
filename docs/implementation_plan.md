@@ -495,3 +495,243 @@ spotify-pipeline/
 5. ✅ Test suites in `tests/test_data_quality.py` and `tests/test_silver_transform.py` passing with 100% green status.
 6. ✅ `docs/diary.md` updated with Day 5 Scorecard, verified row counts, and architectural decisions.
 7. ✅ `docs/questions.md` updated with Day 5 technical interview deep-dive questions and answers.
+
+---
+
+---
+
+# 🗓️ Day 6: Gold Layer (Kimball Dimensional Modeling & Periodic Snapshot Fact)
+
+### 🎯 Day 6 in One Sentence
+
+> **Day 6 transforms trusted Silver entities into a Kimball Star Schema consisting of 4 descriptive dimensions (`dim_artist`, `dim_album`, `dim_track`, `dim_date`) and 1 periodic snapshot fact table (`fact_artist_snapshot`) at the grain of `(artist_key, date_key)`, enabling historical catalog growth, release cadence, and momentum analysis.**
+
+---
+
+### 🏛️ The Frozen Star Schema Architecture
+
+```text
+┌────────────────────────┐                   ┌────────────────────────┐
+│       dim_artist       │                   │       dim_date         │
+├────────────────────────┤                   ├────────────────────────┤
+│ PK: artist_key         │                   │ PK: date_key (YYYYMMDD)│
+│ artist_id (natural)    │                   │ full_date              │
+│ artist_name            │                   │ year, quarter, month   │
+│ genres (array)         │                   │ month_name, week, day  │
+│ spotify_uri, image_url │                   │ day_of_week, is_weekend│
+└───────────┬────────────┘                   └───────────┬────────────┘
+            │ 1                                          │ 1
+            │                                            │
+            │          ┌───────────────────────────────┐ │
+            └─────────►│     fact_artist_snapshot      │◄┘
+                     N ├───────────────────────────────┤ N
+                       │ PK: (artist_key, date_key)    │
+                       │ FK: artist_key                │
+                       │ FK: date_key                  │
+                       │ snapshot_date (audit ts)      │
+                       │───────────────────────────────│
+                       │ total_albums (semi-additive)  │
+                       │ total_tracks (semi-additive)  │
+                       │ total_singles (semi-additive) │
+                       │ recent_releases_12m           │
+                       │ median_release_cadence_days   │
+                       │ catalog_growth_pct            │
+                       │ catalog_momentum_index [0,100]│
+                       └───────────────────────────────┘
+                                       ▲
+    ┌────────────────────────┐         │
+    │       dim_album        │         │
+    ├────────────────────────┤         │ (Conformed dimensions for
+    │ PK: album_key          │         │  downstream drill-down queries)
+    │ album_id (natural)     │         │
+    │ artist_id              │─────────┤
+    │ album_name, album_type │         │
+    │ release_date, year,... │         │
+    └────────────────────────┘         │
+                                       │
+    ┌────────────────────────┐         │
+    │       dim_track        │         │
+    ├────────────────────────┤         │
+    │ PK: track_key          │         │
+    │ track_id (natural)     │         │
+    │ album_id, artist_id    │─────────┘
+    │ track_name, duration_ms│
+    │ duration_min, explicit │
+    └────────────────────────┘
+```
+
+---
+
+### 🧠 Core Kimball Principles Enforced
+
+1. **Strict Grain Definition**:
+   - Grain: **One row per artist per successfully extracted snapshot date**.
+   - Composite Primary Key: `(artist_key, date_key)`.
+   - Never allow duplicate `(artist_key, date_key)` pairs.
+2. **Semi-Additive vs. Non-Additive Measures**:
+   - Semi-additive counters (`total_albums`, `total_tracks`, `total_singles`, `recent_releases_12m`): state observations valid across artists on the same date, invalid across time for the same artist.
+   - Non-additive metrics: `median_release_cadence_days` (statistical summary), `catalog_growth_pct` (rate), `catalog_momentum_index` (score).
+   - Compilation reconciliation: Compilations contribute to `total_tracks`, but are excluded from `total_albums` and `total_singles`. `recent_releases_12m` filters `album_type IN ('album', 'single')`.
+   - Lifetime cadence scope: Cadence tracks lifetime publishing discipline; current activity is captured by `recent_releases_12m`.
+3. **Surrogate vs. Natural Keys**:
+   - Natural IDs (`artist_id`, `album_id`, `track_id`) originate from Spotify.
+   - Surrogate keys (`artist_key`, `album_key`, `track_key`) are warehouse-managed deterministic hash/integer identifiers.
+   - Date key is an explicit smart integer key: `date_key = YYYYMMDD` (e.g., `20260831`).
+4. **Historical Time Series (Zero Overwrites)**:
+   - Gold preserves daily snapshot history: `2026-08-31`, `2026-09-01`, etc.
+   - First snapshot rule: `catalog_growth_pct = NULL` (not `0%`, preventing false stagnation signals).
+   - Missing snapshot rule: PySpark `LAG()` compares against the most recent available prior snapshot.
+5. **Empirical Momentum Normalization**:
+   - The formula:
+     $$\text{Momentum Index} = 0.40 \times S_{\text{recent}} + 0.35 \times S_{\text{growth}} + 0.25 \times S_{\text{cadence}}$$
+   - Normalization thresholds ($0 \rightarrow 100$) calibrated against **real Silver data distributions**, not arbitrary guesses.
+
+---
+
+# 📐 Master Phased Execution Plan for Day 6
+
+---
+
+### 📋 Phase 1: Architecture Freeze & Blueprint (Documentation First)
+
+Following Kimball best practices, data contracts and math definitions are frozen prior to writing PySpark transformation code:
+
+1. **[`docs/gold_schema.md`](file:///d:/data_engineering/Project_DE/spotify-pipeline/docs/gold_schema.md)**:
+   - Formal schema specification for all 5 tables (`dim_artist`, `dim_album`, `dim_track`, `dim_date`, `fact_artist_snapshot`).
+   - Explicit column names, physical PySpark / SQL types, nullability, PK/FK relationships, and business descriptions.
+2. **[`docs/metric_definitions.md`](file:///d:/data_engineering/Project_DE/spotify-pipeline/docs/metric_definitions.md)**:
+   - Mathematical formulation for all 7 fact measures (`total_albums`, `total_tracks`, `total_singles`, `recent_releases_12m`, `median_release_cadence_days`, `catalog_growth_pct`, `catalog_momentum_index`).
+   - Exact edge case handling: First snapshot nulls, single-release artists (division by zero / undefined cadence), and score bounding $[0, 100]$.
+3. **Update [`docs/PLAN.md`](file:///d:/data_engineering/Project_DE/spotify-pipeline/docs/PLAN.md)**:
+   - Freeze the single-fact architecture (`fact_artist_snapshot`), formally deprecating redundant entity snapshots (`fact_album_snapshot`, `fact_track_snapshot`) in favor of conformed dimensions.
+
+---
+
+### 📊 Phase 2: Silver Data Profiling & Metric Calibration
+
+Profile the actual distribution of Silver data across `2026-08-31` and `2026-09-01` to establish empirical scaling boundaries:
+
+1. **Catalog Activity Profiling**:
+   - Inspect album and single counts per artist.
+   - Profile `recent_releases_12m` (min, max, median) relative to snapshot date.
+   - Measure inter-release cadence (days between successive album/single drops) to avoid outlier distortions.
+2. **Score Normalization Formulation**:
+   - Lock in min-max clipping thresholds:
+     - $S_{\text{recent}}$: Scaled based on observed 12-month release velocity.
+     - $S_{\text{growth}}$: Scaled based on percentage track expansion between snapshots.
+     - $S_{\text{cadence}}$: Inverse scale (shorter intervals $\rightarrow$ higher consistency score).
+
+---
+
+### ⚙️ Phase 3: Gold Transformation Engine (`src/transform/gold_transformer.py`)
+
+Build the modular, idempotent PySpark Gold transformation engine:
+
+1. **Date Dimension Generator (`dim_date`)**:
+   - Generate Gregorian calendar table covering target time horizons (e.g., 1950 to 2030).
+   - Smart integer PK `date_key` (`YYYYMMDD`), `full_date`, `year`, `quarter`, `month`, `month_name`, `week_of_year`, `day_of_month`, `day_of_week`, `day_name`, `is_weekend`.
+2. **Conformed Dimensions (`dim_artist`, `dim_album`, `dim_track`)**:
+   - Generate deterministic surrogate keys (`artist_key`, `album_key`, `track_key`) via MD5 hash / monotonically increasing IDs.
+   - Carry forward clean descriptive attributes, foreign keys, and audit lineage (`created_at`).
+3. **Periodic Snapshot Fact (`fact_artist_snapshot`)**:
+   - **Grain**: One record per `(artist_key, date_key)`.
+   - Aggregate semi-additive counters: `total_albums`, `total_tracks`, `total_singles` as of `snapshot_date`.
+   - Window rolling lookback: Calculate `recent_releases_12m` (releases where `release_date >= snapshot_date - 365 days`).
+   - Release interval calculation: Compute median days between releases per artist (`median_release_cadence_days`).
+   - PySpark Window `LAG()`: Calculate `catalog_growth_pct` against previous available snapshot. Ensure initial snapshot resolves to `NULL`.
+   - Calculate composite `catalog_momentum_index` clamped to $[0.0, 100.0]$.
+4. **Physical Storage & Partitioning**:
+   - Dimensions written as unpartitioned/snapshot Parquet to `data/gold/dim_{artist,album,track,date}/`.
+   - Fact written partitioned by `snapshot_date=YYYY-MM-DD` with Dynamic Partition Overwrite to `data/gold/fact_artist_snapshot/`.
+
+---
+
+### 🧪 Phase 4: Automated Gold Quality Gate & Unit Testing
+
+Implement PySpark test suites in `tests/test_gold_transformer.py`:
+
+1. **Grain Uniqueness Test**:
+   - Assert `count(*) == count(distinct artist_key, date_key)` on `fact_artist_snapshot`.
+2. **Referential Integrity Test**:
+   - Assert 100% of `artist_key` in `fact_artist_snapshot` join successfully to `dim_artist`.
+   - Assert 100% of `date_key` in `fact_artist_snapshot` join successfully to `dim_date`.
+3. **First-Snapshot Null Growth Rule**:
+   - Assert that `catalog_growth_pct` is strictly `NULL` on the earliest snapshot (`2026-08-31`) for all artists.
+4. **Metric Bounds & Value Invariants**:
+   - Assert `total_albums >= 0`, `total_tracks >= 0`, `total_singles >= 0`.
+   - Assert `0.0 <= catalog_momentum_index <= 100.0` for all non-null scores.
+
+---
+
+### 🚀 Phase 5: Orchestration, Cloud Sync & Engineering Artifacts
+
+1. **Pipeline Orchestrator (`scripts/run_gold.py`)**:
+   - Orchestrate Silver $\rightarrow$ Gold execution across `2026-08-31` and `2026-09-01`.
+   - Verify dynamic partition overwrite preserves multi-day snapshot history.
+2. **Cloud Lakehouse Synchronization**:
+   - Sync Gold Parquet tables to Amazon S3: `s3://spotify-music-intelligence-luc/gold/`.
+3. **Engineering Diary & Interview Prep**:
+   - Update `docs/diary.md` with Day 6 Scorecard, row counts, and Kimball trade-offs.
+   - Update `docs/questions.md` with Day 6 interview deep-dives (Periodic Snapshot vs Accumulating Snapshot vs Transaction Fact, Surrogate Keys in Big Data, Semi-Additive Measures).
+
+---
+
+# 📁 Target Day 6 Project Structure
+
+```text
+spotify-pipeline/
+│
+├── src/
+│   ├── transform/
+│   │   ├── spark_session.py
+│   │   ├── schemas.py
+│   │   ├── bronze_transformer.py
+│   │   ├── silver_transformer.py
+│   │   └── gold_transformer.py          ──▶ [NEW] Kimball Star Schema & Snapshot Engine
+│   │
+│   └── quality/
+│       └── data_quality.py
+│
+├── scripts/
+│   ├── run_silver.py
+│   └── run_gold.py                     ──▶ [NEW] Master Gold Pipeline Orchestrator
+│
+├── tests/
+│   ├── test_bronze_transformer.py
+│   ├── test_silver_transform.py
+│   ├── test_data_quality.py
+│   └── test_gold_transformer.py        ──▶ [NEW] Kimball & Snapshot Fact Test Suite
+│
+├── docs/
+│   ├── PLAN.md                         ──▶ [MODIFY] Architecture Freeze
+│   ├── gold_schema.md                  ──▶ [NEW] Formal Star Schema Contract
+│   ├── metric_definitions.md           ──▶ [NEW] Metric Formulation & Math Formulas
+│   ├── diary.md                        ──▶ [MODIFY] Day 6 Scorecard & Verification
+│   └── questions.md                    ──▶ [MODIFY] Kimball Data Warehouse Q&A
+│
+└── data/
+    ├── silver/
+    └── gold/                           ──▶ [NEW] Star Schema Parquet Store
+        ├── dim_artist/
+        ├── dim_album/
+        ├── dim_track/
+        ├── dim_date/
+        └── fact_artist_snapshot/
+            ├── snapshot_date=2026-08-31/
+            └── snapshot_date=2026-09-01/
+```
+
+---
+
+## 🏁 Day 6 Success Criteria & Definition of Done
+
+1. ✅ `docs/gold_schema.md` and `docs/metric_definitions.md` published and frozen.
+2. ✅ `docs/PLAN.md` updated reflecting the single-fact Kimball Star Schema architecture.
+3. ✅ `src/transform/gold_transformer.py` implementing 4 dimensions and `fact_artist_snapshot`.
+4. ✅ Surrogate key generation and smart integer `date_key` (`YYYYMMDD`) working reliably.
+5. ✅ Historical windowing correctly computing `catalog_growth_pct` (with initial `NULL`) and bounded $[0, 100]$ `catalog_momentum_index`.
+6. ✅ `scripts/run_gold.py` successfully populating `data/gold/` across historical snapshots `2026-08-31` and `2026-09-01`.
+7. ✅ 100% green test suite in `tests/test_gold_transformer.py` verifying grain uniqueness, referential integrity, and metric bounds.
+8. ✅ `data/gold/` synchronized to `s3://spotify-music-intelligence-luc/gold/`.
+9. ✅ `docs/diary.md` and `docs/questions.md` updated with Day 6 deliverables, metrics, and interview deep-dives.
+
