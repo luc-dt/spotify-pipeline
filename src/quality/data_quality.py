@@ -237,11 +237,15 @@ class DataQualityChecker:
         self,
         df: DataFrame,
         entity: str,
-        range_conditions: Dict[str, tuple],
+        range_conditions: Optional[Dict[str, tuple]] = None,
+        numeric_bounds: Optional[Dict[str, tuple]] = None,
+        allowed_values: Optional[Dict[str, List[Any]]] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         Rule 5: Value / Range Validation.
-        Verifies numeric metrics stay within physically and logically sensible bounds.
+        Verifies numeric metrics stay within physically and logically sensible bounds,
+        and optionally verifies categorical values against allowed sets.
         Format for range_conditions:
             {"column_name": (min_value, max_value)}
             Use None for unbounded sides, e.g. {"track_number": (1, None)}.
@@ -249,10 +253,11 @@ class DataQualityChecker:
         Single-pass aggregation across all specified columns.
         Severity: FAIL if any values fall outside bounds.
         """
+        conditions = range_conditions or numeric_bounds or {}
         agg_exprs = [spark_count(lit(1)).alias("_total_rows")]
         col_conditions = {}
 
-        for col_name, bounds in range_conditions.items():
+        for col_name, bounds in conditions.items():
             min_val, max_val = bounds
             col_expr = col(col_name)
             invalid_cond = None
@@ -272,9 +277,22 @@ class DataQualityChecker:
                     spark_sum(when(full_cond, 1).otherwise(0)).alias(col_name)
                 )
 
+        if allowed_values:
+            for col_name, valid_vals in allowed_values.items():
+                col_expr = col(col_name)
+                invalid_cond = col_expr.isNotNull() & (~col_expr.isin(valid_vals))
+                col_conditions[col_name] = invalid_cond
+                agg_exprs.append(
+                    spark_sum(when(invalid_cond, 1).otherwise(0)).alias(f"_cat_{col_name}")
+                )
+
         row = df.select(agg_exprs).collect()[0]
         total_rows = row["_total_rows"] or 0
-        violations_by_col = {c: int(row[c] or 0) for c in col_conditions}
+        violations_by_col = {}
+        for c in col_conditions:
+            key = f"_cat_{c}" if allowed_values and c in allowed_values and f"_cat_{c}" in row else c
+            violations_by_col[c] = int(row[key] or 0)
+
         total_violations = sum(violations_by_col.values())
         passed = total_violations == 0
 
@@ -284,15 +302,16 @@ class DataQualityChecker:
             "rule": "value_ranges",
             "entity": entity,
             "snapshot_date": self.snapshot_date,
-            "range_conditions": {k: list(v) for k, v in range_conditions.items()},
+            "range_conditions": {k: list(v) for k, v in conditions.items()},
+            "allowed_values": allowed_values or {},
             "status": "PASS" if passed else "FAIL",
             "total_rows": total_rows,
             "violations_by_col": violations_by_col,
             "total_violations": total_violations,
             "message": (
-                f"Entity '{entity}' passed range validation on {list(range_conditions.keys())}."
+                f"Entity '{entity}' passed value/range validation."
                 if passed
-                else f"Entity '{entity}' FAILED range validation! Columns with out-of-bound values: {failed_cols} (Total violations: {total_violations:,})."
+                else f"Entity '{entity}' FAILED value/range validation! Violating columns: {failed_cols} (Total violations: {total_violations:,})."
             ),
         }
 
@@ -382,4 +401,94 @@ class DataQualityChecker:
             json.dump(report_data, f, indent=2)
 
         return report_path
+
+
+def run_quality_gate(
+    snapshot_date: str = "2026-08-31",
+    silver_base_dir: str = "data/silver",
+    spark: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Evaluates conformed Silver Parquet tables against the 5 core Data Quality rules.
+    Returns structured report with 'overall_status': PASS, WARN, or FAIL.
+    """
+    from src.transform.spark_session import get_spark_session
+    own_spark = False
+    if spark is None:
+        spark = get_spark_session(app_name=f"Spotify_DQ_Gate_{snapshot_date}")
+        own_spark = True
+
+    try:
+        checker = DataQualityChecker(snapshot_date=snapshot_date)
+        art_path = os.path.join(silver_base_dir, "artists")
+        alb_path = os.path.join(silver_base_dir, "albums")
+        trk_path = os.path.join(silver_base_dir, "tracks")
+
+        # Partition pruning read
+        art_df = spark.read.parquet(art_path).filter(col("snapshot_date") == snapshot_date).cache()
+        alb_df = spark.read.parquet(alb_path).filter(col("snapshot_date") == snapshot_date).cache()
+        trk_df = spark.read.parquet(trk_path).filter(col("snapshot_date") == snapshot_date).cache()
+
+        # Rule 1: Completeness
+        checker.check_completeness(art_df, "artists", min_expected=1)
+        checker.check_completeness(alb_df, "albums", min_expected=1)
+        checker.check_completeness(trk_df, "tracks", min_expected=1)
+
+        # Rule 2: Uniqueness
+        checker.check_uniqueness(art_df, "artists", ["artist_id"])
+        checker.check_uniqueness(alb_df, "albums", ["album_id"])
+        checker.check_uniqueness(trk_df, "tracks", ["track_id"])
+
+        # Rule 3: Critical Column Nulls
+        checker.check_critical_nulls(art_df, "artists", ["artist_id", "artist_name"])
+        checker.check_critical_nulls(alb_df, "albums", ["album_id", "album_name", "artist_id"])
+        checker.check_critical_nulls(trk_df, "tracks", ["track_id", "track_name", "album_id", "artist_id"])
+
+        # Rule 4: Referential Integrity
+        checker.check_referential_integrity(
+            child_df=alb_df,
+            parent_df=art_df,
+            foreign_key="artist_id",
+            child_entity="albums",
+            parent_entity="artists",
+            max_orphan_threshold_pct=5.0,
+        )
+        checker.check_referential_integrity(
+            child_df=trk_df,
+            parent_df=alb_df,
+            foreign_key="album_id",
+            child_entity="tracks",
+            parent_entity="albums",
+            max_orphan_threshold_pct=5.0,
+        )
+        checker.check_referential_integrity(
+            child_df=trk_df,
+            parent_df=art_df,
+            foreign_key="artist_id",
+            child_entity="tracks",
+            parent_entity="artists",
+            max_orphan_threshold_pct=5.0,
+        )
+
+        # Rule 5: Value Validation
+        checker.check_value_ranges(
+            trk_df, "tracks",
+            range_conditions={
+                "duration_ms": (1, 7200000),
+                "track_number": (1, None),
+                "disc_number": (1, None),
+            },
+        )
+
+        report = checker.generate_report()
+        checker.save_report(report)
+        return report
+    finally:
+        if own_spark:
+            spark.stop()
+
+
+# Reusable engine alias
+DataQualityEngine = DataQualityChecker
+
 

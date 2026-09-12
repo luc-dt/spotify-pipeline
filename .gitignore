@@ -26,6 +26,8 @@ __pycache__/
 docs/past_conversation.md
 docs/questions.md
 .spotify_cache/
+state/
+data/state/
 
 # ============================================
 # CloudFormation & Deployment

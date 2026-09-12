@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 # Ensure UTF-8 output encoding on Windows consoles
@@ -22,10 +23,17 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+# Ensure repository root is in sys.path when running as a script directly
+# (python src/extract/main.py) or via -m (python -m src.extract.main)
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from src.extract.spotify_client import SpotifyClient
 from src.extract.artist_extractor import ArtistExtractor
 from src.extract.album_extractor import AlbumExtractor
 from src.extract.track_extractor import TrackExtractor
+
 
 # Target Cohort for this extraction run
 DEFAULT_TARGET_ARTISTS: List[str] = [
@@ -64,6 +72,7 @@ def run_extraction(
     output_dir: str = "data/raw",
     snapshot_date: Optional[str] = None,
     reset_checkpoint: bool = False,
+    since_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Orchestrates end-to-end extraction across our target artist cohort,
@@ -80,6 +89,8 @@ def run_extraction(
     print(f"🎯 Target Cohort     : {len(artists_to_extract)} artists -> {artists_to_extract}")
     print(f"📁 Output Base       : {output_dir}")
     print(f"🔄 Reset Checkpoint  : {reset_checkpoint}")
+    if since_date:
+        print(f"⏱️ Since Date Filter : releases >= {since_date}")
     print("=" * 70)
 
     # 1. Ensure Output & Checkpoint Directories Exist
@@ -112,7 +123,7 @@ def run_extraction(
         # Load accumulated data from disk if it exists
         all_artists = []
         all_albums = []
-        all_tracks = []
+        prior_snapshot_date = None
         if os.path.exists(artists_file):
             try:
                 with open(artists_file, "r", encoding="utf-8") as f:
@@ -125,12 +136,79 @@ def run_extraction(
             except Exception as e:
                 print(f"⚠️ Error loading existing raw data ({e}), starting in-memory lists fresh.")
                 all_artists, all_albums, all_tracks = [], [], []
+        else:
+            # Look for verified prior snapshot from watermark manager to inherit base catalog
+            if os.path.exists(artists_dir):
+                try:
+                    from src.orchestration.watermark_manager import WatermarkManager
+                    wm = WatermarkManager()
+                    last_watermark = wm.get_last_processed_date("spotify_medallion_pipeline")
+                    if (
+                        last_watermark != "1970-01-01" 
+                        and last_watermark < current_snapshot 
+                        and os.path.exists(os.path.join(artists_dir, f"artists_{last_watermark}.json"))
+                    ):
+                        prior_snapshot_date = last_watermark
+                except Exception:
+                    pass
+
+                if not prior_snapshot_date:
+                    prior_files = sorted([
+                        f for f in os.listdir(artists_dir) 
+                        if f.startswith("artists_") and f.endswith(".json") and f < f"artists_{current_snapshot}.json"
+                    ])
+                    if prior_files:
+                        latest_prior = prior_files[-1]
+                        prior_snapshot_date = latest_prior.replace("artists_", "").replace(".json", "")
+
+                if prior_snapshot_date:
+                    prior_artists_file = os.path.join(artists_dir, f"artists_{prior_snapshot_date}.json")
+                    prior_albums_file = os.path.join(albums_dir, f"albums_{prior_snapshot_date}.json")
+                    prior_tracks_file = os.path.join(tracks_dir, f"tracks_{prior_snapshot_date}.json")
+                    try:
+                        with open(prior_artists_file, "r", encoding="utf-8") as f:
+                            all_artists = json.load(f)
+                        with open(prior_albums_file, "r", encoding="utf-8") as f:
+                            all_albums = json.load(f)
+                        with open(prior_tracks_file, "r", encoding="utf-8") as f:
+                            all_tracks = json.load(f)
+                        if not since_date:
+                            since_date = prior_snapshot_date
+                        print(f"📦 Inherited base catalog from prior snapshot '{prior_snapshot_date}': {len(all_artists)} artists, {len(all_albums)} albums, {len(all_tracks)} tracks.")
+                        print(f"⚡ Incremental mode enabled: only scanning releases since {since_date}.")
+                    except Exception as e:
+                        print(f"⚠️ Could not load prior snapshot ({e}), starting fresh.")
+                        all_artists, all_albums, all_tracks = [], [], []
 
     # 3. Initialize Client & Extractors
     client = SpotifyClient()
     artist_extractor = ArtistExtractor(client=client)
     album_extractor = AlbumExtractor(client=client)
     track_extractor = TrackExtractor(client=client)
+
+    # Build historical album_id -> tracks cache to avoid re-fetching unchanged albums
+    cached_tracks_by_album: Dict[str, List[Dict[str, Any]]] = {}
+    for t in all_tracks:
+        alb_id = t.get("album_id")
+        if alb_id:
+            cached_tracks_by_album.setdefault(alb_id, []).append(t)
+
+    # If current run has no cached tracks, scan historical raw tracks files
+    if not cached_tracks_by_album and os.path.exists(tracks_dir):
+        for fname in sorted(os.listdir(tracks_dir), reverse=True):
+            if fname.endswith(".json") and fname != os.path.basename(tracks_file):
+                try:
+                    with open(os.path.join(tracks_dir, fname), "r", encoding="utf-8") as f:
+                        prior_tracks = json.load(f)
+                        for t in prior_tracks:
+                            alb_id = t.get("album_id")
+                            if alb_id and alb_id not in cached_tracks_by_album:
+                                cached_tracks_by_album.setdefault(alb_id, []).append(t)
+                except Exception:
+                    pass
+                if cached_tracks_by_album:
+                    print(f"📦 Populated track cache with {len(cached_tracks_by_album):,} albums from historical raw state.")
+                    break
 
     # 4. Iterate through each artist in our cohort
     for idx, artist_name in enumerate(artists_to_extract, start=1):
@@ -147,38 +225,75 @@ def run_extraction(
             canonical_name = artist_record["artist_name"]
             print(f"    ✓ Artist: {canonical_name} (ID: {artist_id})")
 
-            # Step B: Paginate Discography Albums/Singles
+            # Step B: Paginate Discography Albums/Singles (limit=50, with optional since_date filter)
             albums = album_extractor.extract_albums(
                 artist_id=artist_id,
                 artist_name=canonical_name,
+                since_date=since_date,
             )
             for album in albums:
                 album["snapshot_date"] = current_snapshot
             print(f"    ✓ Extracted {len(albums)} albums/singles")
 
-            # Step C: Paginate Tracks for each Album
+            # Step C: Paginate Tracks for each Album (Cache-Aware: 0 API calls for existing albums)
             artist_tracks: List[Dict[str, Any]] = []
+            cached_hits = 0
+            api_fetches = 0
+
             for album in albums:
                 album_id = album["album_id"]
-                tracks = track_extractor.extract_track(
-                    album_id=album_id,
-                    artist_id=artist_id,
-                )
-                for track in tracks:
-                    track["snapshot_date"] = current_snapshot
-                    artist_tracks.append(track)
+                if album_id in cached_tracks_by_album and not reset_checkpoint:
+                    # Cache Hit: reuse existing tracks, stamping current snapshot_date
+                    cached_hits += 1
+                    for track in cached_tracks_by_album[album_id]:
+                        track_copy = dict(track)
+                        track_copy["snapshot_date"] = current_snapshot
+                        artist_tracks.append(track_copy)
+                else:
+                    # Cache Miss (New Release): Fetch from Spotify Web API
+                    api_fetches += 1
+                    tracks = track_extractor.extract_track(
+                        album_id=album_id,
+                        artist_id=artist_id,
+                    )
+                    for track in tracks:
+                        track["snapshot_date"] = current_snapshot
+                        artist_tracks.append(track)
 
-            print(f"    ✓ Extracted {len(artist_tracks)} tracks across discography releases")
+            print(f"    ✓ Extracted {len(artist_tracks)} tracks ({cached_hits} albums from cache, {api_fetches} newly fetched)")
 
             # Step D: Atomic Flush for Completed Artist
-            # Remove any prior partial entries for this artist to avoid duplication
+            # Find existing historical albums and tracks for this artist from base catalog
+            existing_artist_albums = [alb for alb in all_albums if alb.get("artist_name") == artist_name]
+            existing_artist_tracks = [t for t in all_tracks if t.get("artist_id") == artist_id]
+
+            # Merge: keep existing, add new ones that were newly discovered
+            seen_alb_ids = {alb["album_id"] for alb in existing_artist_albums if "album_id" in alb}
+            for alb in albums:
+                if alb.get("album_id") not in seen_alb_ids:
+                    existing_artist_albums.append(alb)
+                    seen_alb_ids.add(alb.get("album_id"))
+
+            seen_trk_ids = {t["track_id"] for t in existing_artist_tracks if "track_id" in t}
+            for trk in artist_tracks:
+                if trk.get("track_id") not in seen_trk_ids:
+                    existing_artist_tracks.append(trk)
+                    seen_trk_ids.add(trk.get("track_id"))
+
+            # Stamp current snapshot_date on all records for this snapshot partition
+            for alb in existing_artist_albums:
+                alb["snapshot_date"] = current_snapshot
+            for trk in existing_artist_tracks:
+                trk["snapshot_date"] = current_snapshot
+
+            # Rebuild clean cumulative lists
             all_artists = [a for a in all_artists if a.get("artist_name") != artist_name]
             all_albums = [alb for alb in all_albums if alb.get("artist_name") != artist_name]
             all_tracks = [t for t in all_tracks if t.get("artist_id") != artist_id]
 
             all_artists.append(artist_record)
-            all_albums.extend(albums)
-            all_tracks.extend(artist_tracks)
+            all_albums.extend(existing_artist_albums)
+            all_tracks.extend(existing_artist_tracks)
 
             # Flush updated state to raw JSON files
             with open(artists_file, "w", encoding="utf-8") as f:
@@ -195,6 +310,9 @@ def run_extraction(
 
         except Exception as e:
             print(f"    ❌ Error extracting '{artist_name}': {e}")
+            if "RateLimit" in type(e).__name__ or "429" in str(e):
+                print("    ⏳ Rate limit encountered. Escalating to orchestrator retry...")
+                raise e
             print("    ⏸️ Extraction paused. Re-run after quota resets to resume from this artist.")
             break
 
@@ -209,6 +327,8 @@ def run_extraction(
     print(f"• Total Tracks Extracted  : {len(all_tracks):,}")
     print(f"• Completed Artists       : {sorted(list(completed_artists))}")
     print(f"• Total Execution Time    : {elapsed:.2f} seconds")
+    print(f"• Total Spotify API Calls : {client.request_count} (Measured telemetry)")
+
     print("• Raw Data Files:")
     if os.path.exists(artists_file):
         print(f"    - Artists : {artists_file} ({os.path.getsize(artists_file)/1024:.1f} KB)")
@@ -228,6 +348,7 @@ def run_extraction(
         "completed_artists": sorted(list(completed_artists)),
         "is_complete": is_complete,
         "elapsed_seconds": elapsed,
+        "api_calls_count": client.request_count,
     }
 
 
@@ -256,6 +377,12 @@ def parse_args():
         action="store_true",
         help="Ignore existing checkpoint and re-extract from scratch.",
     )
+    parser.add_argument(
+        "--since-date",
+        type=str,
+        default=None,
+        help="Optional release date filter (YYYY-MM-DD) to only extract albums released on or after this date.",
+    )
     return parser.parse_args()
 
 
@@ -266,4 +393,8 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         snapshot_date=args.snapshot_date,
         reset_checkpoint=args.reset_checkpoint,
+        since_date=args.since_date,
     )
+
+# Reusable module alias
+main = run_extraction

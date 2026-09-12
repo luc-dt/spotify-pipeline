@@ -1,5 +1,13 @@
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
+
+# Ensure repository root is in sys.path when running script directly
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from src.extract.spotify_client import SpotifyClient
 
 class ArtistExtractor:
@@ -15,7 +23,7 @@ class ArtistExtractor:
         )
         items = data.get("artists", {}).get("items", [])
         if not items:
-            raise ValueError(f"No artist fount for query: '{artist_name}'")
+            raise ValueError(f"No artist found for query: '{artist_name}'")
 
         artist_item = items[0] 
 

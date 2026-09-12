@@ -1,7 +1,15 @@
 # we have all the albums, we need to extract the tracks inside each album.
-from datetime import datetime, timezone
+import sys
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Ensure repository root is in sys.path when running script directly
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from src.extract.spotify_client import SpotifyClient
 from src.extract.album_extractor import AlbumExtractor
 
@@ -11,7 +19,7 @@ class TrackExtractor:
         self.client = client or SpotifyClient()
 
     def extract_track(self, album_id: str, artist_id: str ="") -> List[Dict[str, Any]]:
-        """Pagininates through an album's tracks (limit=10) and extracts simplified track metadata."""
+        """Paginates through an album's tracks using maximum batch size (limit=50) and extracts track metadata."""
         all_tracks = []
         seen_ids = set()
         offset = 0
@@ -19,7 +27,7 @@ class TrackExtractor:
         while True:
             data = self.client.get(
                 f"v1/albums/{album_id}/tracks",
-                params={"limit": 10, "offset": offset},
+                params={"limit": 50, "offset": offset},
             )
 
             items = data.get("items", [])
@@ -48,7 +56,7 @@ class TrackExtractor:
                 })
             
             offset += len(items)
-            time.sleep(0.05)            
+            time.sleep(0.1)  # Polite pacing between album track pages
 
             # Stop condition when all tracks in the album are collected
             if offset >= total:

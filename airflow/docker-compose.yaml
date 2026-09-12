@@ -63,6 +63,10 @@ x-airflow-common:
     AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
     AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
     AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-ap-southeast-2}
+    S3_BUCKET: ${S3_BUCKET:-spotify-music-intelligence-luc}
+    # Spotify API Credentials
+    SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+    SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
     # Email / SMTP configuration
     AIRFLOW__SMTP__SMTP_HOST: ${AIRFLOW__SMTP__SMTP_HOST:-smtp.gmail.com}
     AIRFLOW__SMTP__SMTP_PORT: ${AIRFLOW__SMTP__SMTP_PORT:-587}
@@ -75,6 +79,10 @@ x-airflow-common:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
+    - ../src:/opt/airflow/src
+    - ../data:/opt/airflow/data
+    - ../sql:/opt/airflow/sql
+    - ../state:/opt/airflow/state
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on

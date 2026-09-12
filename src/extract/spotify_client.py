@@ -9,10 +9,37 @@ import os
 import time
 import requests
 import base64
-from dotenv import load_dotenv
+from typing import Optional, Dict, Any
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-# Load environment variables from .env file
-load_dotenv()
+# Fallback: Parse .env manually if dotenv is missing or keys are not yet in environment
+for candidate in [
+    os.path.join(os.getcwd(), ".env"),
+    os.path.join(os.path.dirname(__file__), "..", "..", ".env"),
+    "/opt/airflow/.env",
+    "/opt/airflow/airflow/.env",
+]:
+    if os.path.exists(candidate):
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+        except Exception:
+            pass
+
+class SpotifyRateLimitError(Exception):
+    """Raised when Spotify API 429 rate limit is encountered and cannot be immediately resolved."""
+    def __init__(self, retry_after: int, message: Optional[str] = None):
+        self.retry_after = retry_after
+        super().__init__(message or f"Rate limited by Spotify API. Retry-After: {retry_after}s")
+
 
 class SpotifyClient:
 
@@ -33,7 +60,8 @@ class SpotifyClient:
 
         # 3. Initialize token cache (self.access_token = None)
         self.access_token = None
-        self.token_expiry_epoch =  0.0  
+        self.token_expiry_epoch =  0.0
+        self.request_count = 0  # Tracks total HTTP requests issued in this process  
 
     def _get_access_token(self):
         """Requests a new OAuth 2.0 access token via Client Credentitals flow."""
@@ -62,7 +90,13 @@ class SpotifyClient:
         if self.access_token is None or time.time() >= self.token_expiry_epoch:
             self._get_access_token()
 
-    def get(self, endpoint, params=None, max_retries=5, base_delay=1.0):
+    def get(
+        self,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+        max_retries: int = 5,
+        base_delay: float = 1.0,
+    ) -> Dict[str, Any]:
         """Executes a GET request to the Spotify Web API with resilient 429 / 5 xx retry handling."""
         # Allow passing either full URL or relative endpoint like "v1/search" or "search"
         if endpoint.startswith("http"):
@@ -73,40 +107,55 @@ class SpotifyClient:
                 clean_endpoint = f"v1/{clean_endpoint}"
             url = f"https://api.spotify.com/{clean_endpoint}"
         
-        for attempt  in range(1, max_retries + 1):
+        last_retry_after = 60
+        last_status_code = None
+
+        for attempt in range(1, max_retries + 1):
             # 1. Always ensure our Bearer token is valid
             self._ensure_valid_token()
             headers = {"Authorization": f"Bearer {self.access_token}"}
             
             try:
+                self.request_count += 1
                 response = self.session.get(
                     url, headers=headers, params=params, timeout=15
                 )
+                last_status_code = response.status_code
+
                 # Case 1: Success (200 OK)
                 if response.status_code == 200:
                     return response.json()
 
                 # Case 2: Rate Limited (429 Too Many Requests)
                 elif response.status_code == 429:
-                    # Spotify gives use the exact seconds in the "Retry-After" header 
-                    retry_after  = int(
+                    reason = None
+                    try:
+                        err_payload = response.json()
+                        reason = err_payload.get("error", {}).get("reason")
+                    except Exception:
+                        pass
+
+                    last_retry_after = int(
                         response.headers.get(
                             "Retry-After", 
-                            base_delay * (2 ** (attempt  - 1))
+                            int(base_delay * (2 ** (attempt - 1)))
                         )
                     )
-                     # 💡 If Spotify asks us to wait more than 60 seconds (e.g. 50 minutes quota exhausted):
-                    if retry_after > 60:
-                        raise RuntimeError(
-                            f"Spotify Development Mode quota exceeded. "
-                            f"Retry-After is {retry_after}s (~{retry_after // 60} min). "
-                            f"Stop the pipeline and retry after the quota window resets."
-                        )            
-                    
-                    # Add jitter (0.2s - 0.8s) to prevent the "thundering herd" problem
-                    sleep_time = retry_after + random.uniform(0.2, 0.8)
+                    # Distinguish Dev Mode Quota exhaustion from short-term rolling 30s rate throttle
+                    if reason == "QUOTA_EXCEEDED" or last_retry_after > 60:
+                        raise SpotifyRateLimitError(
+                            retry_after=last_retry_after,
+                            message=(
+                                f"Spotify Development Mode quota ceiling reached ({reason or 'High Retry-After'}). "
+                                f"Retry-After is {last_retry_after}s (~{last_retry_after // 60} min). "
+                                f"Stop the pipeline and retry after the quota window resets."
+                            ),
+                        )
+
+                    # Short-term rolling 30s throttle: sleep with jitter and retry
+                    sleep_time = last_retry_after + random.uniform(0.2, 0.8)
                     print(
-                        f"[WARN] 429 Rate limited on attempt {attempt }/{max_retries}. Backing off for {sleep_time:.2f}s..."
+                        f"[RATE_LIMIT] 429 rolling-window throttle received. Backing off for {sleep_time:.2f}s (attempt {attempt}/{max_retries})..."
                     )
                     time.sleep(sleep_time)
 
@@ -138,9 +187,36 @@ class SpotifyClient:
                 )
                 time.sleep(sleep_time)
         
+        if last_status_code == 429:
+            raise SpotifyRateLimitError(retry_after=last_retry_after)
+
         raise RuntimeError(
-            f"Failed to fetch data from {url} after {max_retries} attempts."
+            f"Failed to fetch data from {url} after {max_retries} attempts (last status: {last_status_code})."
         )
+
+
+def spotify_get(url: str, headers: Dict[str, str], max_retries: int = 3) -> Dict[str, Any]:
+    """
+    Standalone wrapper for direct Spotify API calls.
+    Handles 429 explicitly with Retry-After before raising to Airflow.
+    """
+    last_retry_after = 60
+    for attempt in range(1, max_retries + 1):
+        response = requests.get(url, headers=headers, timeout=15)
+
+        if response.status_code == 200:
+            return response.json()
+
+        if response.status_code == 429:
+            last_retry_after = int(response.headers.get("Retry-After", 60))
+            print(f"[QUOTA] 429 received. Waiting {last_retry_after}s (attempt {attempt}/{max_retries})")
+            time.sleep(last_retry_after)
+            continue
+
+        response.raise_for_status()
+
+    raise SpotifyRateLimitError(retry_after=last_retry_after)
+
 
 # -------------------------------------------------------------
 # Test Block

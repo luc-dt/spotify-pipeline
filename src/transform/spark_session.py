@@ -1,10 +1,11 @@
 import os
 import sys
 from typing import Optional
-from dotenv import load_dotenv
-
-# 1. Load any environment variables from .env
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # 2. Critical for Windows: Ensure PySpark worker and driver use the same Python interpreter
 os.environ["PYSPARK_PYTHON"] = sys.executable

@@ -6,10 +6,29 @@ from datetime import date
 from typing import Any, Dict, List, Optional
 import boto3
 from botocore.exceptions import ClientError
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-# 💡 Load .env variables into os.environ
-load_dotenv()
+# Fallback: Parse .env manually if dotenv is missing or keys are not yet in environment
+for candidate in [
+    os.path.join(os.getcwd(), ".env"),
+    os.path.join(os.path.dirname(__file__), "..", "..", ".env"),
+    "/opt/airflow/.env",
+    "/opt/airflow/airflow/.env",
+]:
+    if os.path.exists(candidate):
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+        except Exception:
+            pass
 
 
 class S3Uploader:
