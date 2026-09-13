@@ -113,7 +113,7 @@ with col4:
     """, unsafe_allow_html=True)
 
 with col5:
-    st.markdown(f"""
+    st.markdown("""
     <div class="metric-card">
         <div class="metric-label">Data Quality Gate</div>
         <div class="metric-value" style="font-size: 1.1rem; padding-top: 6px;">

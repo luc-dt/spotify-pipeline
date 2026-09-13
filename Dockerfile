@@ -17,8 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Layer Caching: Copy dependencies first to prevent invalidating pip cache on code changes
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source code, SQL mart definitions, and Gold Parquet layer
 COPY sql/ ./sql/
