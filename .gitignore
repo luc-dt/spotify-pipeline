@@ -53,4 +53,10 @@ airflow/logs/
 .agents
 .bruin.yml
 
-data
+# ============================================
+# Data: Ignore raw, bronze, silver; track lightweight Gold layer for cloud deployment
+# ============================================
+data/*
+!data/gold/
+*.crc
+_SUCCESS

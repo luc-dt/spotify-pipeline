@@ -22,11 +22,7 @@
 -- 1. mart_artist_activity
 -- =============================================================================
 CREATE OR REPLACE VIEW mart_artist_activity AS
-WITH latest_snapshot AS (
-    SELECT MAX(snapshot_date) AS max_date 
-    FROM fact_artist_snapshot
-),
-artist_releases AS (
+WITH artist_releases AS (
     SELECT 
         f.snapshot_date,
         f.artist_key,
@@ -42,7 +38,6 @@ artist_releases AS (
         f.catalog_momentum_index
     FROM fact_artist_snapshot f
     JOIN dim_artist a ON f.artist_key = a.artist_key
-    WHERE f.snapshot_date = (SELECT max_date FROM latest_snapshot)
 )
 SELECT 
     snapshot_date,
@@ -60,7 +55,7 @@ SELECT
         WHEN single_to_album_ratio >= 2.0 THEN 'Balanced Hybrid'
         ELSE 'Album-Focused (Traditional)'
     END AS catalog_strategy,
-    DENSE_RANK() OVER (ORDER BY recent_releases_12m DESC, total_releases DESC) AS activity_rank,
+    DENSE_RANK() OVER (PARTITION BY snapshot_date ORDER BY recent_releases_12m DESC, total_releases DESC) AS activity_rank,
     CASE 
         WHEN recent_releases_12m >= 10 THEN 'Hyper-Active (10+ drops/yr)'
         WHEN recent_releases_12m >= 5 THEN 'Active Campaign (5-9 drops/yr)'
@@ -68,7 +63,7 @@ SELECT
         ELSE 'Dormant / Hiatus (0 drops/yr)'
     END AS activity_tier
 FROM artist_releases
-ORDER BY activity_rank ASC, total_tracks DESC;
+ORDER BY snapshot_date DESC, activity_rank ASC, total_tracks DESC;
 
 
 -- =============================================================================
@@ -170,24 +165,29 @@ WITH snapshot_lag AS (
         ) AS prev_momentum
     FROM fact_artist_snapshot f
     JOIN dim_artist a ON f.artist_key = a.artist_key
-),
-latest_snapshot AS (
-    SELECT MAX(snapshot_date) AS max_date 
-    FROM fact_artist_snapshot
 )
 SELECT 
     snapshot_date,
     artist_key,
     artist_name,
     catalog_momentum_index,
-    DENSE_RANK() OVER (ORDER BY catalog_momentum_index DESC) AS momentum_rank,
+    DENSE_RANK() OVER (PARTITION BY snapshot_date ORDER BY catalog_momentum_index DESC) AS momentum_rank,
     CASE 
         WHEN catalog_momentum_index >= 75.0 THEN 'Elite Velocity (Top Tier)'
         WHEN catalog_momentum_index >= 60.0 THEN 'High Momentum (Active Campaign)'
         WHEN catalog_momentum_index >= 45.0 THEN 'Moderate Momentum (Steady Catalog)'
         ELSE 'Low Momentum / Dormant (Hiatus)'
     END AS momentum_tier,
-    -- Underlying 3 Pillars
+    -- Underlying 3 Pillars (Derived directly from upstream formula)
+    ROUND(0.40 * LEAST(100.0, recent_releases_12m * 10.0), 1) AS volume_score,
+    ROUND(0.35 * CASE 
+        WHEN catalog_growth_pct IS NULL THEN 50.0 
+        ELSE GREATEST(0.0, LEAST(100.0, 50.0 + (catalog_growth_pct * 5.0))) 
+    END, 1) AS growth_score,
+    ROUND(0.25 * CASE 
+        WHEN median_release_cadence_days IS NULL THEN 50.0 
+        ELSE GREATEST(10.0, LEAST(100.0, 100.0 - ((median_release_cadence_days - 14.0) / (180.0 - 14.0)) * 90.0)) 
+    END, 1) AS cadence_score,
     recent_releases_12m,
     median_release_cadence_days,
     catalog_growth_pct,
@@ -202,5 +202,4 @@ SELECT
         ELSE 'Stable (0.0)'
     END AS trajectory_direction
 FROM snapshot_lag
-WHERE snapshot_date = (SELECT max_date FROM latest_snapshot)
-ORDER BY momentum_rank ASC;
+ORDER BY snapshot_date DESC, momentum_rank ASC;
