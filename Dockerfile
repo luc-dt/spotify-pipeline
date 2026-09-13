@@ -16,9 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Layer Caching: Copy dependencies first to prevent invalidating pip cache on code changes
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Layer caching: copy pinned runtime deps first so code changes do not invalidate pip cache
+COPY requirements-app.txt .
+RUN pip install --no-cache-dir --only-binary :all: -r requirements-app.txt
 
 # Copy application source code, SQL mart definitions, and Gold Parquet layer
 COPY sql/ ./sql/

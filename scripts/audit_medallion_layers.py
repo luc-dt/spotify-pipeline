@@ -130,6 +130,7 @@ def audit_aws_s3():
 
         load_dotenv()
         bucket_name = os.getenv("S3_BUCKET", "spotify-music-intelligence-luc")
+        expected_owner = os.getenv("AWS_ACCOUNT_ID", "")
         s3 = boto3.client("s3")
 
         print(f"Connected to S3 Bucket: 's3://{bucket_name}/'")
@@ -141,8 +142,13 @@ def audit_aws_s3():
             ("Gold Fact Table", "gold/fact_artist_snapshot/"),
         ]
 
+        # Build list_objects_v2 kwargs; include ExpectedBucketOwner when available
+        # to verify bucket ownership and prevent bucket-takeover (SonarCloud python:S7608)
         for label, prefix in prefixes:
-            resp = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix, Delimiter="/")
+            s3_kwargs: dict = {"Bucket": bucket_name, "Prefix": prefix, "Delimiter": "/"}
+            if expected_owner:
+                s3_kwargs["ExpectedBucketOwner"] = expected_owner
+            resp = s3.list_objects_v2(**s3_kwargs)
             common_prefixes = resp.get("CommonPrefixes", [])
             subfolders = [p["Prefix"].replace(prefix, "").strip("/") for p in common_prefixes]
             print(f"  • {label:20} : {subfolders}")

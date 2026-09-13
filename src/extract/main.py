@@ -35,6 +35,23 @@ from src.extract.album_extractor import AlbumExtractor
 from src.extract.track_extractor import TrackExtractor
 
 
+# ---------------------------------------------------------------------------
+#  Path-Traversal Protection (SonarCloud pythonsecurity:S8707)
+# ---------------------------------------------------------------------------
+def _safe_resolve_path(user_path: str, *, label: str = "path") -> Path:
+    """Resolve *user_path* and ensure it stays within the project root.
+
+    Raises ``ValueError`` when the resolved path escapes the project
+    boundary — defending against path-traversal via CLI arguments.
+    """
+    resolved = (_PROJECT_ROOT / user_path).resolve()
+    if not resolved.is_relative_to(_PROJECT_ROOT):
+        raise ValueError(
+            f"Security: {label} '{user_path}' resolves outside project root."
+        )
+    return resolved
+
+
 # Target Cohort for this extraction run
 DEFAULT_TARGET_ARTISTS: List[str] = [
     "Taylor Swift",
@@ -83,21 +100,24 @@ def run_extraction(
     artists_to_extract = target_artists or DEFAULT_TARGET_ARTISTS
     current_snapshot = snapshot_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    # Sanitize user-supplied output_dir against path traversal
+    safe_output = _safe_resolve_path(output_dir, label="output-dir")
+
     print("=" * 70)
     print("🎵 SPOTIFY CATALOG EXTRACTION ENGINE")
     print(f"📅 Snapshot Date     : {current_snapshot}")
     print(f"🎯 Target Cohort     : {len(artists_to_extract)} artists -> {artists_to_extract}")
-    print(f"📁 Output Base       : {output_dir}")
+    print(f"📁 Output Base       : {safe_output}")
     print(f"🔄 Reset Checkpoint  : {reset_checkpoint}")
     if since_date:
         print(f"⏱️ Since Date Filter : releases >= {since_date}")
     print("=" * 70)
 
     # 1. Ensure Output & Checkpoint Directories Exist
-    artists_dir = os.path.join(output_dir, "artists")
-    albums_dir = os.path.join(output_dir, "albums")
-    tracks_dir = os.path.join(output_dir, "tracks")
-    checkpoint_dir = os.path.join(output_dir, ".checkpoints")
+    artists_dir = str(safe_output / "artists")
+    albums_dir = str(safe_output / "albums")
+    tracks_dir = str(safe_output / "tracks")
+    checkpoint_dir = str(safe_output / ".checkpoints")
 
     os.makedirs(artists_dir, exist_ok=True)
     os.makedirs(albums_dir, exist_ok=True)
