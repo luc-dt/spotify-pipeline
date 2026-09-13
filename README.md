@@ -1,6 +1,9 @@
 # 🎵 Spotify Music Intelligence Platform
 ### Cloud Data Engineering + Business Analytics (Medallion Lakehouse)
 
+[![CI Pipeline](https://github.com/luc-dt/spotify-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/luc-dt/spotify-pipeline/actions/workflows/ci.yml)
+
+
 An end-to-end cloud data platform that extracts Spotify catalog metadata via OAuth 2.0, ingests semi-structured JSON into an immutable **AWS S3 Data Lake**, transforms data through **Bronze, Silver, and Gold (Medallion)** layers using **Apache Spark (PySpark)**, maintains historical snapshots for catalog growth and release cadence, enforces automated **Data Quality gates**, orchestrates workflows with **Apache Airflow**, and serves interactive analytics through **Streamlit**.
 
 ---
@@ -380,7 +383,7 @@ docker-compose up -d
 - [x] **Day 6: Gold Layer & Snapshots** (Kimball Star Schema, conformed dimensions & `fact_artist_snapshot` with Catalog Momentum Index)
 - [x] **Day 7: Business Analytics (SQL)** (DuckDB Vectorized OLAP engine & 4 Curated Data Marts in `sql/marts/`)
 - [x] **Day 8: Airflow Orchestration** (Containerized Airflow 2.4.1 + PySpark on Temurin Java 17, atomic watermarks, fail-fast cloud sync)
-- [ ] **Day 9: Streamlit Intelligence App** (4-page interactive executive intelligence application)
+- [x] **Day 9: Streamlit Intelligence App** (4-page interactive executive intelligence application on DuckDB marts with 12 automated contract tests & Community Cloud deployment)
 - [ ] **Day 10: Production Polish & CI/CD** (Docker hardening, pytest suite & GitHub Actions)
 
 ---

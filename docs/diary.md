@@ -488,4 +488,82 @@ Executed `scripts/test_airflow_pipeline.py` verifying back-to-back idempotency:
 | **End-to-End Airflow Run** | Automated execution verified in Docker cluster | `docker compose exec airflow-webserver ...` | ✅ **DONE** |
 | **Project Roadmap Alignment** | Day 8 marked completed in tracker | `docs/PLAN.md` | ✅ **DONE** |
 
+---
 
+## 🗓️ Day 9: Streamlit Intelligence Application & DuckDB OLAP Consumer (2026-09-13)
+
+### 🎯 Objective:
+Deliver the user-facing commercial capstone of the platform: an interactive, multi-page **Streamlit Intelligence Application** querying the in-process **DuckDB analytical data marts** and **Gold Kimball Star Schema** (`data/gold/`).
+
+Enforces the central architectural invariant: **Streamlit is strictly a read-only presentation and exploration layer with zero business transformation leakage**.
+
+---
+
+### 🏗️ Architecture & Component Design:
+
+1. **In-Process Vectorized Data Access Layer (`streamlit/utils/db.py`)**:
+   - Connection cached with `@st.cache_resource`, mounting Gold views (`setup_gold_views.sql`) and 4 Curated Marts (`setup_marts.sql`) over local Snappy Parquet.
+   - Dynamic Snapshot Discovery: `SELECT DISTINCT snapshot_date ...` automatically adapts as new snapshots are appended by Airflow.
+   - Parameterized SQL execution returning clean pandas DataFrames with zero client-side transformation.
+
+2. **Spotify UI Dark Theme & Reusable Chart Factory (`streamlit/utils/charts.py`)**:
+   - Palette: Spotify Green (`#1DB954`), Dark Canvas (`#121212`), Card Background (`#181818`), Crisp White Text (`#FFFFFF`).
+   - Centralized Plotly figure builders: Strategy Donut, Activity Leaderboard, Transparent 3-Pillar Decomposition Horizontal Gauge, Longitudinal Snapshot Trajectory Line, Catalog Track Duration Distribution with Median Marker, Clean vs. Explicit Ratio Stacked Bar, 12-Month Release Seasonality, and Singles vs. Albums Annual Evolution (1970–2026).
+
+3. **4 Interactive Commercial Pages + Live Health Landing Page**:
+   - **Home (`app.py`)**: End-to-end Medallion diagram, Live Pipeline Health Card (8 artists, 732 albums, 3,837 tracks, 4 snapshots, 6/6 DQ pass).
+   - **Page 1 (Executive Overview)**: Snapshot selector, 5-KPI executive strip, strategy donut, and activity leaderboard table.
+   - **Page 2 (Artist 360 & Momentum)**: Individual artist selector, profile card, transparent 3-pillar breakdown (Volume /40, Growth /35, Cadence /25), trajectory across all snapshots, and discography explorer with clickable Spotify web links (`🎵 Open Album`).
+   - **Page 3 (Album & Track Analytics)**: Dynamic filters, duration histogram/box plot, explicit content ratio, and track explorer with direct Spotify track playback links (`🎧 Play Track`).
+   - **Page 4 (Catalog Trends)**: 12-calendar-month release seasonality patterns, singles vs. albums annual evolution, and lifetime publishing cadence distribution.
+
+4. **12/12 Automated Contract & Anti-Leakage Test Suite (`tests/test_streamlit_marts.py`)**:
+   - **View Contracts**: Verifies all 5 Gold views and 4 SQL marts exist.
+   - **Schema Contracts**: Verifies expected column bindings in marts.
+   - **Data Contracts**: Asserts $>0$ rows and non-negative KPI measures.
+   - **Pillar Reconciliation**: Reconciles Volume + Growth + Cadence to total Momentum Index ($\pm 1.0\text{ pt}$).
+   - **AST Anti-Leakage Inspection**: Scans all Python scripts under `streamlit/pages/` and enforces that analytical operations (`.groupby()`, `.rolling()`, `.rank()`, `.pivot_table()`) are **never** called in presentation code.
+
+---
+
+### 🏆 Day 9 Scorecard & Definition of Done:
+
+| Requirement | Implementation | Command / File | Status |
+|---|---|---|:---:|
+| **Spotify Dark Theme UI** | Spotify Green (`#1DB954`) theme tokens | `.streamlit/config.toml` | ✅ **DONE** |
+| **Presentation Utilities** | Duration `ms -> MM:SS`, badges, formatters | `streamlit/utils/formatting.py` | ✅ **DONE** |
+| **DuckDB Data Access Layer** | Cached connection, parameterized queries, dynamic dates | `streamlit/utils/db.py` | ✅ **DONE** |
+| **Reusable Chart Factory** | Decoupled Plotly builders with dark styling | `streamlit/utils/charts.py` | ✅ **DONE** |
+| **Landing Page & Health Card** | Architecture flow, live warehouse metrics, DQ badge | `streamlit/app.py` | ✅ **DONE** |
+| **Executive Overview Page** | Dynamic snapshot selector, strategy donut, activity table | `streamlit/pages/1_📊_Executive_Overview.py` | ✅ **DONE** |
+| **Artist 360 & Momentum Page** | Transparent 3-pillar breakdown, trajectory line, Spotify links | `streamlit/pages/2_🎤_Artist_360_Momentum.py` | ✅ **DONE** |
+| **Album & Track Analytics Page** | Duration distribution, explicit ratio, track explorer | `streamlit/pages/3_💿_Album_Track_Analytics.py` | ✅ **DONE** |
+| **Catalog Trends Page** | 12-month seasonality, format evolution (1970–2026), cadence | `streamlit/pages/4_📅_Catalog_Trends.py` | ✅ **DONE** |
+| **Contract & Anti-Leakage Tests** | 12 automated pytest assertions (100% PASS) | `tests/test_streamlit_marts.py` | ✅ **DONE** |
+| **Streamlit Cloud Deployment** | Deployed live to Streamlit Community Cloud | `share.streamlit.io` | ✅ **DONE** |
+
+---
+
+## 🗓️ Day 10: Production Polish, CI/CD & Recruiter-Ready Documentation (2026-09-13)
+
+### 🎯 Objective:
+Package and containerize the platform, automate quality validation in the cloud via GitHub Actions CI/CD, eliminate environmental drift, and document the architecture for engineering hiring managers.
+
+### 🧩 Work Done:
+- **Test Infrastructure (`pytest.ini`)**:
+  - Configured `pytest.ini` with `testpaths = tests`, `pythonpath = .`, and `norecursedirs = airflow .venv data .git` to prevent NTFS / Linux POSIX symlink errors (`[WinError 1920]`) when scanning Airflow scheduler log volumes.
+  - Achieved **52/52 passing tests (100% green)** across Bronze, Silver, Gold, S3 uploader, Data Quality gates, and Streamlit DuckDB marts.
+- **GitHub Actions CI/CD Pipeline (`.github/workflows/ci.yml`)**:
+  - Automated cloud test runner on `ubuntu-latest` triggering on every `push` and `pull_request` to `main`.
+  - Configured dual-runtime dependencies: Eclipse Temurin Java 17 (required for JVM-based PySpark testing) and Python 3.10 with pip wheel caching.
+  - Included syntax pre-check and executed `pytest -v` across all 52 tests, completing in **1m 17s** with 100% success.
+  - Integrated live GitHub Actions CI status badge in `README.md`.
+- **Streamlit Application Containerization (`Dockerfile`, `.dockerignore`, `docker-compose.yml`)**:
+  - Built production `Dockerfile` using `python:3.10-slim` with layer caching, curl healthcheck, and non-root unbuffered stdout/stderr.
+  - Crafted `.dockerignore` to strip `.venv`, `.git`, temporary scratch files, and heavy raw caches.
+  - Configured root `docker-compose.yml` for isolated containerized execution on canonical port `8501:8501` with live read-only volume mounts (`:ro`) for rapid UI prototyping.
+  - Verified container vitality: `STATUS: Up (healthy)` on `http://localhost:8501`.
+- **Architectural Separation of Concerns**:
+  - Maintained clear separation between root `docker-compose.yml` (serving client-side Streamlit on port `8501`) and `airflow/docker-compose.yaml` (orchestrating upstream data pipelines on port `8080`).
+
+---

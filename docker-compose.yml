@@ -1,0 +1,20 @@
+services:
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: spotify-pipeline-streamlit:latest
+    container_name: spotify_streamlit_app
+    ports:
+      - "8501:8501"
+    volumes:
+      # Mount directories for live development hot-reloading
+      - ./streamlit:/app/streamlit:ro
+      - ./sql:/app/sql:ro
+      - ./data/gold:/app/data/gold:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_ENABLE_CORS=false
+      - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
+    restart: unless-stopped
