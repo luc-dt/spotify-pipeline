@@ -1,13 +1,12 @@
 # ========================================================================================
-# MUSICBRAINZ DATA PIPELINE: DEPENDENCY SPECIFICATION
+# Spotify Music Intelligence DATA PIPELINE: DEPENDENCY SPECIFICATION
 # ========================================================================================
 # Purpose:
 #   Specifies required Python packages for local development, orchestration testing,
 #   unit test execution (pytest), and Athena SQL runner scripts.
 #
-# Note on Spark Version Divergence:
-#   - Local development / unit testing uses PySpark 4.1.1 in Python virtual environments.
-#   - Production AWS Glue 4.0 runtime ships with Apache Spark 3.3.0 / Python 3.10.
+# Canonical Spark Engine Specification:
+#   - Apache Spark 3.4.1 runtime unified across local development, Airflow Docker container, and cloud.
 # ========================================================================================
 
 # Cloud & AWS SDK
@@ -18,8 +17,8 @@ botocore>=1.29.0
 requests>=2.28.0
 urllib3>=1.26.0
 
-# PySpark Engine (Local Testing & Validation)
-pyspark==4.1.1
+# Canonical PySpark Engine (Unified across Local, Airflow Docker, and Cloud)
+pyspark==3.4.1
 
 # Data Processing & Parquet Handling
 pandas>=1.5.0

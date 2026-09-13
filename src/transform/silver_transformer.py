@@ -255,7 +255,8 @@ class SilverTransformer:
         """
         output_path = os.path.join(self.silver_base_dir, entity)
         (
-            df.write
+            df.coalesce(1)
+            .write
             .mode("overwrite")
             .partitionBy("snapshot_date")
             .parquet(output_path)
@@ -319,7 +320,13 @@ class SilverTransformer:
 
 
 if __name__ == "__main__":
-    target_date = sys.argv[1] if len(sys.argv) > 1 else "2026-08-31"
+    import argparse
+    parser = argparse.ArgumentParser(description="PySpark Silver Layer Transformer")
+    parser.add_argument("snapshot_date_pos", nargs="?", default=None, help="Snapshot date (YYYY-MM-DD)")
+    parser.add_argument("--snapshot-date", "-d", type=str, default=None, help="Snapshot date (YYYY-MM-DD)")
+    args = parser.parse_args()
+
+    target_date = args.snapshot_date or args.snapshot_date_pos or "2026-08-31"
 
     transformer = SilverTransformer()
     transformer.run_snapshot(snapshot_date=target_date)

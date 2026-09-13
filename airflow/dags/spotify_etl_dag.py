@@ -140,7 +140,8 @@ def upload_raw_s3_callable(**context):
             else:
                 logger.warning(f"⚠️ Raw file not found for {entity} at {local_path}")
     except Exception as e:
-        logger.warning(f"⚠️ S3 upload skipped or credentials unconfigured in container ({e}). Proceeding locally.")
+        logger.error(f"❌ S3 Raw upload failed for {ds}: {e}", exc_info=True)
+        raise AirflowException(f"S3 Raw upload failed: {e}")
 
 
 def local_raw_sensor_callable(**context):
@@ -148,13 +149,8 @@ def local_raw_sensor_callable(**context):
     ds = context["ds"]
     track_path = os.path.join(PROJECT_ROOT, "data", "raw", "tracks", f"tracks_{ds}.json")
     if not os.path.exists(track_path):
-        # Fall back to checking 2026-09-01 default partition
-        default_track = os.path.join(PROJECT_ROOT, "data", "raw", "tracks", "tracks_2026-09-01.json")
-        if os.path.exists(default_track):
-            logger.info(f"✓ Verified default raw track payload exists: {default_track}")
-            return True
-        raise AirflowException(f"Awaiting raw track payload at: {track_path}")
-    logger.info(f"✓ Verified raw track payload exists: {track_path}")
+        raise AirflowException(f"Awaiting raw track payload for {ds} at: {track_path}")
+    logger.info(f"✓ Verified raw track payload exists for {ds}: {track_path}")
     return True
 
 
@@ -171,12 +167,9 @@ def bronze_transform_callable(**context):
         summary = transformer.run_snapshot(snapshot_date=ds)
         transformer.spark.stop()
         logger.info(f"✓ Bronze Transformation Summary: {summary}")
-    except (ImportError, Exception) as e:
-        bronze_tracks = os.path.join(PROJECT_ROOT, "data", "bronze", "tracks")
-        if os.path.exists(bronze_tracks):
-            logger.info(f"✓ Verified Bronze Parquet partitions already exist on storage: {bronze_tracks}")
-        else:
-            raise AirflowException(f"Bronze transformation requires Spark: {e}")
+    except Exception as e:
+        logger.error(f"❌ Bronze PySpark transformation failed for {ds}: {e}", exc_info=True)
+        raise AirflowException(f"Bronze transformation failed: {e}")
 
 
 def silver_transform_callable(**context):
@@ -192,12 +185,9 @@ def silver_transform_callable(**context):
         summary = transformer.run_snapshot(snapshot_date=ds)
         transformer.spark.stop()
         logger.info(f"✓ Silver Transformation Summary: {summary}")
-    except (ImportError, Exception) as e:
-        silver_tracks = os.path.join(PROJECT_ROOT, "data", "silver", "tracks")
-        if os.path.exists(silver_tracks):
-            logger.info(f"✓ Verified Silver Parquet partitions already exist on storage: {silver_tracks}")
-        else:
-            raise AirflowException(f"Silver transformation requires Spark: {e}")
+    except Exception as e:
+        logger.error(f"❌ Silver PySpark transformation failed for {ds}: {e}", exc_info=True)
+        raise AirflowException(f"Silver transformation failed: {e}")
 
 
 def silver_dq_gate_callable(**context) -> bool:
@@ -218,13 +208,9 @@ def silver_dq_gate_callable(**context) -> bool:
         overall_status = report.get("overall_status", "FAIL")
         logger.info(f"🛡️ DQ Gate Result: {overall_status}")
         return overall_status in ["PASS", "WARN"]
-    except (ImportError, Exception) as e:
-        # Storage check for verified report
-        report_dir = os.path.join(PROJECT_ROOT, "data", "quality", "reports")
-        if os.path.exists(report_dir):
-            logger.info(f"✓ DQ Audit Reports verified on storage: {report_dir}")
-            return True
-        return True
+    except Exception as e:
+        logger.error(f"❌ Silver Data Quality Gate execution failed for {ds}: {e}", exc_info=True)
+        raise AirflowException(f"Silver Data Quality Gate failed: {e}")
 
 
 def gold_transform_callable(**context):
@@ -240,12 +226,9 @@ def gold_transform_callable(**context):
             sync_s3=False,
         )
         logger.info(f"✓ Gold Transformation Complete for {ds}!")
-    except (ImportError, Exception) as e:
-        gold_fact = os.path.join(PROJECT_ROOT, "data", "gold", "fact_artist_snapshot")
-        if os.path.exists(gold_fact):
-            logger.info(f"✓ Verified Gold Star Schema partitions already exist on storage: {gold_fact}")
-        else:
-            raise AirflowException(f"Gold transformation requires Spark: {e}")
+    except Exception as e:
+        logger.error(f"❌ Gold Kimball transformation failed for {ds}: {e}", exc_info=True)
+        raise AirflowException(f"Gold transformation failed: {e}")
 
 
 def gold_s3_sync_callable(**context):
@@ -255,7 +238,8 @@ def gold_s3_sync_callable(**context):
         logger.info(f"☁️ Synchronizing Gold Parquet files to s3://{S3_BUCKET}/gold/...")
         sync_gold_to_s3(local_gold_dir=os.path.join(PROJECT_ROOT, "data", "gold"), bucket_name=S3_BUCKET)
     except Exception as e:
-        logger.warning(f"⚠️ Gold S3 sync skipped ({e}). Proceeding locally.")
+        logger.error(f"❌ Gold S3 sync failed for {context.get('ds')}: {e}", exc_info=True)
+        raise AirflowException(f"Gold S3 sync failed: {e}")
 
 
 def refresh_duckdb_marts_callable(**context):
@@ -273,8 +257,9 @@ def refresh_duckdb_marts_callable(**context):
         for mart in marts:
             cnt = con.execute(f"SELECT COUNT(*) FROM {mart}").fetchone()[0]
             logger.info(f"  ✓ Mart '{mart}' validated with {cnt:,} rows.")
-    except (ImportError, Exception) as e:
-        logger.info(f"✓ Analytical marts SQL definitions verified at {os.path.join(PROJECT_ROOT, 'sql')}.")
+    except Exception as e:
+        logger.error(f"❌ DuckDB Analytical Marts refresh failed for {ds}: {e}", exc_info=True)
+        raise AirflowException(f"DuckDB Marts refresh failed: {e}")
 
 
 def commit_watermark_callable(**context):

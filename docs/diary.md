@@ -380,3 +380,112 @@ Transition from the Kimball Gold Parquet warehouse layer into high-value commerc
 | **Interview Question Bank (Q20–Q24)** | 5 deep-dive interview questions on DuckDB, Marts & Windowing | `docs/questions.md` | ✅ **DONE** |
 | **Roadmap Alignment** | Updated milestone tracker | `docs/PLAN.md` | ✅ **DONE** |
 
+---
+
+## 🗓️ Day 8: Airflow Orchestration, Watermarking & Incremental Loading (2026-09-12)
+
+### 🎯 Objective:
+
+Orchestrate the end-to-end Spotify medallion lakehouse pipeline using **Apache Airflow** (Docker-based), implement an atomic state **watermark manager**, eliminate the quadratic full-refresh API extraction bottleneck via an **incremental delta engine**, establish a 3-layer rate-limit and quota defense-in-depth architecture, ingest BTS for `2026-09-01` to complete the 8-artist superstar cohort, and verify mathematical **idempotency across 5 core invariants**.
+
+---
+
+### 🏗️ Airflow DAG & Orchestration Topology:
+
+```text
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                airflow/dags/spotify_etl_dag.py                         │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+                 ┌──────────────────────────────────────────────────┐
+                 │          TaskGroup: extract_and_land             │
+                 │  1. extract_spotify_catalog (Incremental Delta)  │
+                 │  2. upload_raw_to_s3 (Hive raw/ landing)         │
+                 │  3. wait_for_s3_raw_data (S3KeySensor reschedule)│
+                 └─────────────────────────┬────────────────────────┘
+                                           │
+                                           ▼
+                 ┌──────────────────────────────────────────────────┐
+                 │         TaskGroup: medallion_processing          │
+                 │  1. process_bronze_layer (PySpark StructType)    │
+                 │  2. run_bronze_dq_checks (Null & Schema audits)  │
+                 │  3. process_silver_layer (Cleanse & Deduplicate) │
+                 │  4. silver_dq_gate (ShortCircuitOperator)        │
+                 │  5. process_gold_layer (Kimball Star Schema)     │
+                 └─────────────────────────┬────────────────────────┘
+                                           │
+                                           ▼
+                 ┌──────────────────────────────────────────────────┐
+                 │           TaskGroup: gold_and_marts              │
+                 │  1. refresh_duckdb_views (Semantic Gold Views)   │
+                 │  2. compute_analytical_marts (4 Curated Marts)   │
+                 │  3. sync_gold_to_s3 (Parquet lakehouse sync)     │
+                 │  4. update_watermark_state (Atomic Commit)       │
+                 └──────────────────────────────────────────────────┘
+```
+
+---
+
+### 🧠 Core Architectural Decisions & Engineering Innovations:
+
+1. **Eliminating the Full-Refresh Bottleneck (`src/extract/main.py`)**:
+   - *Problem*: Previously, extraction crawled all 741 historical albums and 3,851 tracks on every daily run (~1,000+ API calls), triggering Spotify HTTP 429 lockouts and exhausting developer mode limits.
+   - *Solution*: Re-architected extraction into an **incremental delta engine**:
+     - Inherits verified base catalog state (albums and tracks) from the latest prior snapshot.
+     - Performs 8 artist profile calls to update follower and popularity metrics.
+     - Scans page 1 of artist albums with an early-stop optimization (`break` once `release_date < since_date`).
+     - Reuses existing tracks for unchanged albums (0 track calls), querying track details only for newly detected releases.
+     - Reduces daily workload to an observed baseline of **~16–24 API calls** in ~12 seconds.
+
+2. **Defense-in-Depth for Rate Limits & Quota Ceilings (`src/extract/spotify_client.py`)**:
+   - **Layer 1 (Client)**: Inspects HTTP 429 responses, parses the `Retry-After` header, detects Spotify's 2026 `reason: "QUOTA_EXCEEDED"` field, and applies exponential backoff with jitter. Distinguishes 30-second rolling window throttles from account quota exhaustion.
+   - **Layer 2 (Orchestration)**: Airflow task retries (5 retries with exponential backoff) reschedule failed attempts across an extended recovery window.
+   - **Layer 3 (State Recovery)**: Persistent per-artist checkpoints (`data/raw/.checkpoints/`) guarantee that interrupted runs resume from the exact failed artist without duplicate requests.
+   - **Telemetry Tracking**: Added `client.request_count` to capture empirical API call metrics on every extraction run.
+
+3. **Atomic Watermark State Management (`src/orchestration/watermark_manager.py`)**:
+   - Built a decoupled `WatermarkManager` tracking `last_processed_date`, `processed_snapshots`, and `metadata` in `state/watermarks.json`.
+   - Guaranteed atomic state writes using the `.tmp` + `Path.replace()` atomic OS rename pattern, preventing state corruption during unexpected worker termination.
+
+4. **S3KeySensor with Reschedule Mode**:
+   - Configured `S3KeySensor` to verify raw payload presence in S3 using `mode="reschedule"`, ensuring Celery worker slots are released during wait cycles rather than blocked.
+
+5. **Data Quality Circuit Breaker (`ShortCircuitOperator`)**:
+   - Positioned between Silver and Gold layers. If Silver data quality checks fail, the pipeline halts immediately, preventing bad data from contaminating business marts.
+
+6. **Cohort Completion for BTS (`2026-09-01`)**:
+   - Ingested BTS across Raw, Bronze, Silver, Gold, and DuckDB Marts, bringing the `fact_artist_snapshot` table to 16 total rows (8 for `2026-08-31`, 8 for `2026-09-01`).
+   - Verified that BTS ranks #3 in `mart_artist_momentum` (Momentum Index: 65.04).
+
+---
+
+### 📊 Mathematical Idempotency Verification (5/5 Invariants Passed):
+
+Executed `scripts/test_airflow_pipeline.py` verifying back-to-back idempotency:
+
+| Invariant | Target Property | Verified Result | Status |
+| :--- | :--- | :--- | :---: |
+| **Invariant 1** | Zero Row Multiplication | Pre-run: 16 rows $\rightarrow$ Post-run: 16 rows ($16 == 16$) | ✅ **PASSED** |
+| **Invariant 2** | Zero Duplicate PKs | Count of duplicate `(artist_key, date_key)` pairs = 0 | ✅ **PASSED** |
+| **Invariant 3** | Zero Orphan Keys | Orphan foreign keys across dimensional tables = 0 | ✅ **PASSED** |
+| **Invariant 4** | Monotonic Watermark | `last_processed_date` monotonically advances to latest snapshot | ✅ **PASSED** |
+| **Invariant 5** | DAG AST Integrity | DAG parses in <0.2s with 0 syntax or cyclic dependency errors | ✅ **PASSED** |
+
+---
+
+### 🏆 Day 8 Final Scorecard & Definition of Done:
+
+| Requirement | Implementation | Command / File | Status |
+|---|---|---|:---:|
+| **Airflow Orchestration DAG** | 3 TaskGroups, S3 sensors, and PySpark operators | `airflow/dags/spotify_etl_dag.py` | ✅ **DONE** |
+| **Docker Compose Environment** | Airflow 2.8+ cluster (webserver, scheduler, worker, redis, postgres) | `airflow/docker-compose.yaml` | ✅ **DONE** |
+| **Watermark State Manager** | Atomic state persistence with `.tmp` + `replace()` | `src/orchestration/watermark_manager.py` | ✅ **DONE** |
+| **Incremental Delta Extractor** | Observed newest-first early stop & track reuse | `src/extract/main.py`, `album_extractor.py` | ✅ **DONE** |
+| **Rate-Limit & Quota Resilience** | 429 jitter backoff, `QUOTA_EXCEEDED` parsing, request counter | `src/extract/spotify_client.py` | ✅ **DONE** |
+| **BTS Ingestion Backfill** | Full cohort of 8/8 artists complete for `2026-09-01` | `data/gold/fact_artist_snapshot/` | ✅ **DONE** |
+| **Idempotency Verification Harness** | Suite validating all 5 mathematical invariants | `scripts/test_airflow_pipeline.py` | ✅ **DONE** |
+| **End-to-End Airflow Run** | Automated execution verified in Docker cluster | `docker compose exec airflow-webserver ...` | ✅ **DONE** |
+| **Project Roadmap Alignment** | Day 8 marked completed in tracker | `docs/PLAN.md` | ✅ **DONE** |
+
+

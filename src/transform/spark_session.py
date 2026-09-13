@@ -34,6 +34,8 @@ def get_spark_session(
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.ui.enabled", "false")
         .config("spark.sql.session.timeZone", "UTC")
+        # Optimization: shuffle.partitions=4 avoids 200 tiny partitions for this catalog scale (~3.8K tracks)
+        .config("spark.sql.shuffle.partitions", "4")
         .config("spark.sql.parquet.compression.codec", "snappy")
         .config(
             "spark.sql.sources.partitionOverwriteMode", "dynamic"

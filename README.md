@@ -377,11 +377,11 @@ docker-compose up -d
 - [x] **Day 3: AWS S3 Raw Data Lake** (Partitioned S3 storage `extracted_at=...`, AES-256 encryption, 8 unit tests)
 - [x] **Day 4: Bronze Layer (PySpark)** (StructType schemas, multiLine JSON, Snappy Parquet, 82.0% compression, 5 unit tests)
 - [x] **Day 5: Silver Layer & Data Quality** (Window deduplication, date normalization, automated 5-rule DQ gate, quarantine routing, 18 unit tests)
-- [ ] **Day 6: Gold Layer & Snapshots** (Star Schema & `fact_artist_snapshot`)
-- [ ] **Day 7: Business Analytics (SQL)** (10–15 analytical business queries)
-- [ ] **Day 8: Airflow Orchestration** (End-to-end DAG & incremental loading)
-- [ ] **Day 9: Streamlit Intelligence App** (4-page interactive UI)
-- [ ] **Day 10: Production Polish & CI/CD** (Docker, pytest suite & GitHub Actions)
+- [x] **Day 6: Gold Layer & Snapshots** (Kimball Star Schema, conformed dimensions & `fact_artist_snapshot` with Catalog Momentum Index)
+- [x] **Day 7: Business Analytics (SQL)** (DuckDB Vectorized OLAP engine & 4 Curated Data Marts in `sql/marts/`)
+- [x] **Day 8: Airflow Orchestration** (Containerized Airflow 2.4.1 + PySpark on Temurin Java 17, atomic watermarks, fail-fast cloud sync)
+- [ ] **Day 9: Streamlit Intelligence App** (4-page interactive executive intelligence application)
+- [ ] **Day 10: Production Polish & CI/CD** (Docker hardening, pytest suite & GitHub Actions)
 
 ---
 
@@ -390,42 +390,66 @@ docker-compose up -d
 ```text
 spotify-pipeline/
 ├── src/
-│   ├── extract/                 # API client, artist/album/track extractors
-│   │   ├── spotify_client.py
+│   ├── extract/                 # API client, artist/album/track incremental extractors
+│   │   ├── spotify_client.py    # Rate-limit (429) & token-cached HTTP client
 │   │   ├── artist_extractor.py
 │   │   ├── album_extractor.py
 │   │   ├── track_extractor.py
-│   │   └── main.py
-│   ├── transform/               # PySpark Bronze & Silver transformers
+│   │   └── main.py              # Master delta extraction runner
+│   ├── transform/               # Distributed PySpark Medallion engine
 │   │   ├── spark_session.py     # Decoupled SparkSession factory
 │   │   ├── schemas.py           # StructType data contracts
 │   │   ├── bronze_transformer.py# Raw JSON -> Bronze Snappy Parquet
-│   │   └── silver_transformer.py# Bronze -> Conformed Silver with Window deduplication
+│   │   ├── silver_transformer.py# Bronze -> Conformed Silver with Window deduplication
+│   │   └── gold_transformer.py  # Kimball Star Schema (4 dimensions + 1 periodic fact)
 │   ├── quality/                 # Automated Data Quality Gate
-│   │   └── data_quality.py      # 5 validation rules, quarantine routing & JSON reporting
-│   └── storage/                 # AWS S3 Boto3 lakehouse ingestion
-│       └── s3_uploader.py
+│   │   └── data_quality.py      # 5 validation rules & JSON audit reporting
+│   ├── storage/                 # AWS S3 Boto3 lakehouse ingestion
+│   │   └── s3_uploader.py
+│   └── orchestration/           # Pipeline state & watermarking
+│       └── watermark_manager.py # Atomic watermark commits (.tmp + Path.replace())
+├── sql/                         # DuckDB Semantic Layer & Curated Marts
+│   ├── setup_gold_views.sql     # View mappings over Gold Parquet
+│   ├── setup_marts.sql          # Mart aggregation pipeline
+│   ├── analytics_queries.sql    # 8 Core Executive Business Queries
+│   └── marts/                   # 4 Curated Analytical Data Marts
+│       ├── artist_activity_mart.sql
+│       ├── artist_momentum_mart.sql
+│       ├── catalog_growth_mart.sql
+│       └── release_seasonality_mart.sql
+├── airflow/                     # Containerized Airflow Orchestration
+│   ├── Dockerfile               # Multi-stage Eclipse Temurin Java 17 + PySpark image
+│   ├── docker-compose.yaml      # Cluster services (webserver, scheduler, worker, redis, pg)
+│   ├── .env.example             # Airflow cluster environment template
+│   └── dags/
+│       └── spotify_etl_dag.py   # Master Medallion ETL & S3 DAG
 ├── scripts/                     # Operational verification & runner CLI scripts
-│   ├── test_spotify_auth.py
-│   ├── verify_aws_credentials.py
-│   ├── verify_bronze.py
-│   └── run_silver.py            # Master Silver & DQ orchestration runner
-├── tests/                       # Pytest unit & integration test suites (18 tests)
-│   ├── test_s3_uploader.py
+│   ├── audit_medallion_layers.py# Multi-layer inventory audit (Local, DuckDB, S3)
+│   ├── run_gold.py              # Gold layer standalone runner & S3 sync
+│   ├── run_silver.py            # Silver layer standalone runner
+│   ├── test_airflow_pipeline.py # 5/5 Mathematical idempotency verification
+│   └── verify_aws_credentials.py
+├── tests/                       # Pytest unit & integration test suites
 │   ├── test_bronze_transformer.py
 │   ├── test_silver_transformer.py
-│   └── test_data_quality.py
+│   ├── test_gold_transformer.py
+│   ├── test_data_quality.py
+│   └── test_s3_uploader.py
 ├── data/                        # Local Medallion data storage (Parquet/JSON)
-│   ├── raw/
-│   ├── bronze/
-│   ├── silver/
-│   └── quality/reports/
-├── docs/                        # Engineering diary, BRD, questions & implementation plans
-│   ├── diary.md
-│   ├── questions.md
-│   └── implementation_plan.md
-├── requirements.txt             # Python dependencies
-├── .env.example                 # Environment configuration template
+│   ├── raw/                     # Extracted JSON payloads
+│   ├── bronze/                  # Raw-conformed Snappy Parquet
+│   ├── silver/                  # Cleaned & conformed Snappy Parquet
+│   ├── gold/                    # Star Schema Dimensions & Fact Parquet
+│   └── quality/reports/         # JSON data quality reports
+├── state/
+│   └── watermarks.json          # High-watermark checkpoint state
+├── docs/                        # Architecture specs & Engineering Diary
+│   ├── diary.md                 # Daily detailed engineering logs & metrics
+│   ├── gold_schema.md           # Kimball Star Schema specification & ERD
+│   ├── metric_definitions.md    # Math & classification of metrics
+│   └── business_requirements.md
+├── requirements.txt             # Canonical Python dependencies (PySpark 3.4.1)
+├── .env.example                 # Root environment configuration template
 └── README.md
 ```
 
