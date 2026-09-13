@@ -1,7 +1,8 @@
 # ==============================================================================
 # Spotify Music Intelligence Platform — Streamlit Analytics Container
 # ==============================================================================
-FROM python:3.10-slim
+# Pinned to SHA256 digest to satisfy SonarCloud docker:S8544 (unpinned base image)
+FROM python:3.10-slim@sha256:fd76ade0c607f27677bc04be3c60749f400eedc941d9e72967e19a4cedff80c2
 
 # Set working directory inside the container
 WORKDIR /app
