@@ -2,7 +2,12 @@
 ### Cloud Data Engineering + Business Analytics (Medallion Lakehouse)
 
 [![CI Pipeline](https://github.com/luc-dt/spotify-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/luc-dt/spotify-pipeline/actions/workflows/ci.yml)
-
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://spotify-pipeline-qf45k8k5e2k7a544r2cugx.streamlit.app/)
+[![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3100/)
+[![Apache Spark](https://img.shields.io/badge/Apache%20Spark-3.4.1-E25A1C.svg)](https://spark.apache.org/)
+[![Apache Airflow](https://img.shields.io/badge/Apache%20Airflow-2.8.1-017CEE.svg)](https://airflow.apache.org/)
+[![DuckDB](https://img.shields.io/badge/DuckDB-OLAP-FFF000.svg)](https://duckdb.org/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 
 An end-to-end cloud data platform that extracts Spotify catalog metadata via OAuth 2.0, ingests semi-structured JSON into an immutable **AWS S3 Data Lake**, transforms data through **Bronze, Silver, and Gold (Medallion)** layers using **Apache Spark (PySpark)**, maintains historical snapshots for catalog growth and release cadence, enforces automated **Data Quality gates**, orchestrates workflows with **Apache Airflow**, and serves interactive analytics through **Streamlit**.
 
@@ -343,22 +348,28 @@ python -m src.transform.bronze_transformer 2026-08-31
 # 8. Run Silver Layer Transformation & Automated Data Quality Gate
 python scripts/run_silver.py --all
 
-# 9. Run PySpark Unit & Integration Tests (18 tests)
-pytest tests/ -v
+# 9. Run PySpark & DuckDB Unit, Contract & Integration Tests (52 tests)
+pytest -v
 ```
 
-### 3. Full Pipeline Setup (Production Orchestration Scope)
+### 3. Quickstart & Containerized Stack Execution
 
-> [!NOTE]
-> Full automated orchestration (Airflow DAG + PySpark Medallion Jobs + Streamlit BI Portal) will be incrementally unlocked as roadmap stages 6–10 are completed. See the [Roadmap](#conclusion--roadmap) below.
-
+#### A. Streamlit Intelligence Portal (Interactive BI)
 ```bash
-# Launch full local stack (Airflow + Postgres + Streamlit)
-docker-compose up -d
+# Launch containerized Streamlit analytics application
+docker compose up -d
 
-# Trigger End-to-End Dag
-# Access Airflow UI at http://localhost:8080 (airflow/airflow)
-# Access Streamlit Intelligence Portal at http://localhost:8501
+# Open in browser:
+# -> http://localhost:8501
+```
+
+#### B. Apache Airflow Orchestration Cluster (Upstream Pipeline)
+```bash
+# Launch containerized Airflow 2.4.1 cluster with PySpark & Temurin Java 17
+cd airflow && docker compose up -d
+
+# Open in browser:
+# -> http://localhost:8080 (airflow / airflow)
 ```
 
 ---
@@ -383,8 +394,8 @@ docker-compose up -d
 - [x] **Day 6: Gold Layer & Snapshots** (Kimball Star Schema, conformed dimensions & `fact_artist_snapshot` with Catalog Momentum Index)
 - [x] **Day 7: Business Analytics (SQL)** (DuckDB Vectorized OLAP engine & 4 Curated Data Marts in `sql/marts/`)
 - [x] **Day 8: Airflow Orchestration** (Containerized Airflow 2.4.1 + PySpark on Temurin Java 17, atomic watermarks, fail-fast cloud sync)
-- [x] **Day 9: Streamlit Intelligence App** (4-page interactive executive intelligence application on DuckDB marts with 12 automated contract tests & Community Cloud deployment)
-- [ ] **Day 10: Production Polish & CI/CD** (Docker hardening, pytest suite & GitHub Actions)
+- [x] **Day 9: Streamlit Intelligence App** (4-page interactive executive intelligence application on DuckDB marts with 13 automated contract tests & Community Cloud deployment)
+- [x] **Day 10: Production Polish, CI/CD & Containerization** (Docker hardening, 52/52 automated test suite, GitHub Actions CI/CD pipeline & recruiter-ready documentation)
 
 ---
 
@@ -392,6 +403,9 @@ docker-compose up -d
 
 ```text
 spotify-pipeline/
+├── .github/
+│   └── workflows/
+│       └── ci.yml               # GitHub Actions CI workflow (Java 17 + Python 3.10 + Pytest)
 ├── src/
 │   ├── extract/                 # API client, artist/album/track incremental extractors
 │   │   ├── spotify_client.py    # Rate-limit (429) & token-cached HTTP client
@@ -406,20 +420,31 @@ spotify-pipeline/
 │   │   ├── silver_transformer.py# Bronze -> Conformed Silver with Window deduplication
 │   │   └── gold_transformer.py  # Kimball Star Schema (4 dimensions + 1 periodic fact)
 │   ├── quality/                 # Automated Data Quality Gate
-│   │   └── data_quality.py      # 5 validation rules & JSON audit reporting
+│   │   └── data_quality.py      # 6 validation rules & JSON audit reporting
 │   ├── storage/                 # AWS S3 Boto3 lakehouse ingestion
 │   │   └── s3_uploader.py
 │   └── orchestration/           # Pipeline state & watermarking
 │       └── watermark_manager.py # Atomic watermark commits (.tmp + Path.replace())
 ├── sql/                         # DuckDB Semantic Layer & Curated Marts
 │   ├── setup_gold_views.sql     # View mappings over Gold Parquet
-│   ├── setup_marts.sql          # Mart aggregation pipeline
+│   ├── setup_marts.sql          # Mart aggregation pipeline (4 Curated Marts)
 │   ├── analytics_queries.sql    # 8 Core Executive Business Queries
-│   └── marts/                   # 4 Curated Analytical Data Marts
+│   └── marts/                   # Standalone analytical SQL marts
 │       ├── artist_activity_mart.sql
 │       ├── artist_momentum_mart.sql
 │       ├── catalog_growth_mart.sql
 │       └── release_seasonality_mart.sql
+├── streamlit/                   # Streamlit Intelligence Application
+│   ├── app.py                   # Landing page, Medallion flow & live health card
+│   ├── pages/                   # Multi-page interactive analytical dashboards
+│   │   ├── 1_📊_Executive_Overview.py
+│   │   ├── 2_🎤_Artist_360_Momentum.py
+│   │   ├── 3_💿_Album_Track_Analytics.py
+│   │   └── 4_📅_Catalog_Trends.py
+│   └── utils/                   # Presentation & data access layer
+│       ├── db.py                # In-process DuckDB connector (@st.cache_resource)
+│       ├── charts.py            # Centralized Spotify-dark Plotly builders
+│       └── formatting.py        # Presentation formatters (ms -> MM:SS, badges)
 ├── airflow/                     # Containerized Airflow Orchestration
 │   ├── Dockerfile               # Multi-stage Eclipse Temurin Java 17 + PySpark image
 │   ├── docker-compose.yaml      # Cluster services (webserver, scheduler, worker, redis, pg)
@@ -432,17 +457,18 @@ spotify-pipeline/
 │   ├── run_silver.py            # Silver layer standalone runner
 │   ├── test_airflow_pipeline.py # 5/5 Mathematical idempotency verification
 │   └── verify_aws_credentials.py
-├── tests/                       # Pytest unit & integration test suites
+├── tests/                       # Pytest unit, contract & integration test suites (52 tests)
 │   ├── test_bronze_transformer.py
 │   ├── test_silver_transformer.py
 │   ├── test_gold_transformer.py
 │   ├── test_data_quality.py
-│   └── test_s3_uploader.py
+│   ├── test_s3_uploader.py
+│   └── test_streamlit_marts.py  # Contract and AST anti-leakage tests
 ├── data/                        # Local Medallion data storage (Parquet/JSON)
 │   ├── raw/                     # Extracted JSON payloads
 │   ├── bronze/                  # Raw-conformed Snappy Parquet
 │   ├── silver/                  # Cleaned & conformed Snappy Parquet
-│   ├── gold/                    # Star Schema Dimensions & Fact Parquet
+│   ├── gold/                    # Star Schema Dimensions & Fact Parquet (Tracked in Git)
 │   └── quality/reports/         # JSON data quality reports
 ├── state/
 │   └── watermarks.json          # High-watermark checkpoint state
@@ -451,6 +477,10 @@ spotify-pipeline/
 │   ├── gold_schema.md           # Kimball Star Schema specification & ERD
 │   ├── metric_definitions.md    # Math & classification of metrics
 │   └── business_requirements.md
+├── .dockerignore                # Docker build context optimization
+├── Dockerfile                   # Streamlit production container definition
+├── docker-compose.yml           # Root Docker Compose for Streamlit service
+├── pytest.ini                   # Pytest path and directory discovery configuration
 ├── requirements.txt             # Canonical Python dependencies (PySpark 3.4.1)
 ├── .env.example                 # Root environment configuration template
 └── README.md

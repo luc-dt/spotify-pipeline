@@ -26,6 +26,10 @@ COPY streamlit/ ./streamlit/
 COPY .streamlit/ ./.streamlit/
 COPY data/gold/ ./data/gold/
 
+# Create a dedicated non-root application user for container security
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
 # Expose default Streamlit port
 EXPOSE 8501
 
