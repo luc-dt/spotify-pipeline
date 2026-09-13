@@ -318,7 +318,7 @@ def test_check_value_ranges_fail_out_of_bounds(spark, checker):
     assert result["total_violations"] == 2
     assert result["violations_by_col"]["duration_ms"] == 1
     assert result["violations_by_col"]["track_number"] == 1
-    assert "FAILED range validation" in result["message"]
+    assert "FAILED value/range validation" in result["message"]
 
 
 # ===========================================================================
