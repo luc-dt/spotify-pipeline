@@ -141,3 +141,29 @@ class TestS3Uploader:
 
         with pytest.raises(ValueError, match="Integrity Mismatch"):
             uploader.verify_object("test/key.json", str(test_file))
+
+    def test_sync_directory(self, uploader, tmp_path):
+        """Test sync_directory walks partitions and uploads matching files."""
+        # Create fake parquet files
+        p1 = tmp_path / "albums" / "snapshot_date=2026-09-14"
+        p1.mkdir(parents=True)
+        (p1 / "part-0.parquet").write_bytes(b"data1")
+        (p1 / "_SUCCESS").write_bytes(b"")
+        (p1 / ".part-0.parquet.crc").write_bytes(b"crc")
+
+        # Older partition that should be skipped when snapshot_date="2026-09-14"
+        p2 = tmp_path / "albums" / "snapshot_date=2026-09-13"
+        p2.mkdir(parents=True)
+        (p2 / "part-1.parquet").write_bytes(b"data2")
+
+        count = uploader.sync_directory(
+            local_dir=str(tmp_path),
+            s3_prefix="bronze",
+            snapshot_date="2026-09-14",
+        )
+        assert count == 1
+        uploader.s3_client.upload_file.assert_called_once()
+        call_kwargs = uploader.s3_client.upload_file.call_args[1]
+        assert "bronze/albums/snapshot_date=2026-09-14/part-0.parquet" in call_kwargs["Key"]
+        assert call_kwargs["ExtraArgs"]["ContentType"] == "application/vnd.apache.parquet"
+

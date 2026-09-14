@@ -5,7 +5,7 @@
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://spotify-pipeline-qf45k8k5e2k7a544r2cugx.streamlit.app/)
 [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3100/)
 [![Apache Spark](https://img.shields.io/badge/Apache%20Spark-3.4.1-E25A1C.svg)](https://spark.apache.org/)
-[![Apache Airflow](https://img.shields.io/badge/Apache%20Airflow-2.8.1-017CEE.svg)](https://airflow.apache.org/)
+[![Apache Airflow](https://img.shields.io/badge/Apache%20Airflow-2.4.1-017CEE.svg)](https://airflow.apache.org/)
 [![DuckDB](https://img.shields.io/badge/DuckDB-OLAP-FFF000.svg)](https://duckdb.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 

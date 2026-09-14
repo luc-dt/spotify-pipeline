@@ -189,6 +189,55 @@ class S3Uploader:
       print("=" * 70)
       return results
 
+    def sync_directory(
+        self,
+        local_dir: str,
+        s3_prefix: str,
+        snapshot_date: Optional[str] = None,
+    ) -> int:
+        """
+        Synchronizes local files (Parquet/JSON) to Amazon S3 under s3_prefix.
+        If snapshot_date is provided, only partitions matching 'snapshot_date={snapshot_date}'
+        (or unpartitioned tables) are uploaded.
+        """
+        if not os.path.exists(local_dir):
+            return 0
+
+        self.validate_bucket()
+        uploaded_count = 0
+
+        for root, _, files in os.walk(local_dir):
+            # If snapshot_date filter is requested, match partition folder
+            if snapshot_date and "snapshot_date=" in root and f"snapshot_date={snapshot_date}" not in root:
+                continue
+
+            for file in files:
+                if file.startswith(".") or file.endswith(".crc") or file == "_SUCCESS":
+                    continue
+
+                local_path = os.path.join(root, file)
+                rel_path = os.path.relpath(local_path, local_dir).replace("\\", "/")
+                s3_key = f"{s3_prefix}/{rel_path}"
+
+                content_type = "application/octet-stream"
+                if file.endswith(".json"):
+                    content_type = "application/json"
+                elif file.endswith(".parquet"):
+                    content_type = "application/vnd.apache.parquet"
+
+                self.s3_client.upload_file(
+                    Filename=local_path,
+                    Bucket=self.bucket_name,
+                    Key=s3_key,
+                    ExtraArgs={
+                        "ContentType": content_type,
+                        "ServerSideEncryption": "AES256",
+                    },
+                )
+                uploaded_count += 1
+
+        return uploaded_count
+
 
 if __name__ == "__main__":
   import sys

@@ -21,13 +21,9 @@ __pycache__/
 *.ipynb
 
 # ============================================
-# Data & Cache
+# Documentation & Notes
 # ============================================
-docs/past_conversation.md
-docs/questions.md
-.spotify_cache/
-state/
-data/state/
+docs/
 
 # ============================================
 # CloudFormation & Deployment
@@ -54,9 +50,8 @@ airflow/logs/
 .bruin.yml
 
 # ============================================
-# Data: Ignore raw, bronze, silver; track lightweight Gold layer for cloud deployment
+# Data & Cache
 # ============================================
-data/*
-!data/gold/
-*.crc
-_SUCCESS
+.spotify_cache/
+state/
+data/

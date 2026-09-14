@@ -172,6 +172,24 @@ def bronze_transform_callable(**context):
         raise AirflowException(f"Bronze transformation failed: {e}")
 
 
+def sync_bronze_s3_callable(**context):
+    """Syncs Bronze Parquet partitions to Amazon S3."""
+    ds = context["ds"]
+    logger.info(f"☁️ Synchronizing Bronze Parquet files for {ds} to s3://{S3_BUCKET}/bronze/...")
+    try:
+        from src.storage.s3_uploader import S3Uploader
+        uploader = S3Uploader(bucket_name=S3_BUCKET)
+        count = uploader.sync_directory(
+            local_dir=os.path.join(PROJECT_ROOT, "data", "bronze"),
+            s3_prefix="bronze",
+            snapshot_date=ds,
+        )
+        logger.info(f"  ✓ Successfully synced {count} Bronze objects for {ds} to s3://{S3_BUCKET}/bronze/")
+    except Exception as e:
+        logger.error(f"❌ Bronze S3 sync failed for {ds}: {e}", exc_info=True)
+        raise AirflowException(f"Bronze S3 sync failed: {e}")
+
+
 def silver_transform_callable(**context):
     """Executes PySpark Silver layer transformation with deduplication and standardization."""
     ds = context["ds"]
@@ -211,6 +229,24 @@ def silver_dq_gate_callable(**context) -> bool:
     except Exception as e:
         logger.error(f"❌ Silver Data Quality Gate execution failed for {ds}: {e}", exc_info=True)
         raise AirflowException(f"Silver Data Quality Gate failed: {e}")
+
+
+def sync_silver_s3_callable(**context):
+    """Syncs Silver Parquet partitions to Amazon S3 after passing the DQ Gate."""
+    ds = context["ds"]
+    logger.info(f"☁️ Synchronizing Silver Parquet files for {ds} to s3://{S3_BUCKET}/silver/...")
+    try:
+        from src.storage.s3_uploader import S3Uploader
+        uploader = S3Uploader(bucket_name=S3_BUCKET)
+        count = uploader.sync_directory(
+            local_dir=os.path.join(PROJECT_ROOT, "data", "silver"),
+            s3_prefix="silver",
+            snapshot_date=ds,
+        )
+        logger.info(f"  ✓ Successfully synced {count} Silver objects for {ds} to s3://{S3_BUCKET}/silver/")
+    except Exception as e:
+        logger.error(f"❌ Silver S3 sync failed for {ds}: {e}", exc_info=True)
+        raise AirflowException(f"Silver S3 sync failed: {e}")
 
 
 def gold_transform_callable(**context):
@@ -372,6 +408,13 @@ with DAG(
             **COMPUTE_DEFAULTS,
         )
 
+        sync_bronze_s3 = PythonOperator(
+            task_id="sync_bronze_s3",
+            python_callable=sync_bronze_s3_callable,
+            provide_context=True,
+            **COMPUTE_DEFAULTS,
+        )
+
         transform_silver = PythonOperator(
             task_id="transform_silver",
             python_callable=silver_transform_callable,
@@ -386,7 +429,14 @@ with DAG(
             provide_context=True,
         )
 
-        transform_bronze >> transform_silver >> silver_dq_gate
+        sync_silver_s3 = PythonOperator(
+            task_id="sync_silver_s3",
+            python_callable=sync_silver_s3_callable,
+            provide_context=True,
+            **COMPUTE_DEFAULTS,
+        )
+
+        transform_bronze >> sync_bronze_s3 >> transform_silver >> silver_dq_gate >> sync_silver_s3
 
     # 4. Kimball Star Schema Gold Group (Fast-Fail Compute Defaults)
     with TaskGroup("gold_and_marts") as gold_and_marts:
