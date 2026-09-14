@@ -11,10 +11,11 @@ import argparse
 from datetime import datetime, timezone
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 # Ensure UTF-8 output encoding on Windows consoles
 if sys.platform == "win32":
@@ -38,19 +39,28 @@ from src.extract.track_extractor import TrackExtractor
 # ---------------------------------------------------------------------------
 #  Path-Traversal Protection (SonarCloud pythonsecurity:S8707)
 # ---------------------------------------------------------------------------
-def _safe_resolve_path(user_path: str, *, label: str = "path") -> Path:
+def _safe_resolve_path(user_path: Union[str, Path], *, label: str = "path") -> Path:
     """Resolve *user_path* and ensure it stays within the project root.
 
     Raises ``ValueError`` when the resolved path escapes the project
     boundary — defending against path-traversal via CLI arguments.
     """
-    resolved = (_PROJECT_ROOT / user_path).resolve()
+    path_obj = Path(user_path)
+    if path_obj.is_absolute():
+        resolved = path_obj.resolve()
+    else:
+        resolved = (_PROJECT_ROOT / path_obj).resolve()
+
     if not resolved.is_relative_to(_PROJECT_ROOT):
         raise ValueError(
             f"Security: {label} '{user_path}' resolves outside project root."
         )
     return resolved
 
+
+# Constants for validation and file handling
+_DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+_JSON_EXTENSION = ".json"
 
 # Target Cohort for this extraction run
 DEFAULT_TARGET_ARTISTS: List[str] = [
@@ -65,23 +75,25 @@ DEFAULT_TARGET_ARTISTS: List[str] = [
 ]
 
 
-def load_checkpoint(checkpoint_file: str) -> Set[str]:
+def load_checkpoint(checkpoint_file: Union[str, Path]) -> Set[str]:
     """Loads set of completed artist names from the snapshot checkpoint file."""
-    if os.path.exists(checkpoint_file):
+    safe_file = _safe_resolve_path(checkpoint_file, label="checkpoint_file")
+    if safe_file.exists():
         try:
-            with open(checkpoint_file, "r", encoding="utf-8") as f:
+            with open(safe_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return set(data.get("completed_artists", []))
         except Exception as e:
-            print(f"⚠️ Warning: Could not read checkpoint file {checkpoint_file}: {e}")
+            print(f"⚠️ Warning: Could not read checkpoint file {safe_file}: {e}")
     return set()
 
 
-def save_checkpoint(checkpoint_file: str, completed_artists: Set[str]) -> None:
+def save_checkpoint(checkpoint_file: Union[str, Path], completed_artists: Set[str]) -> None:
     """Persists completed artist identifiers to disk for crash recovery."""
-    os.makedirs(os.path.dirname(checkpoint_file), exist_ok=True)
-    with open(checkpoint_file, "w", encoding="utf-8") as f:
-        json.dump({"completed_artists": sorted(list(completed_artists))}, f, indent=2)
+    safe_file = _safe_resolve_path(checkpoint_file, label="checkpoint_file")
+    safe_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(safe_file, "w", encoding="utf-8") as f:
+        json.dump({"completed_artists": sorted(completed_artists)}, f, indent=2)
 
 
 def run_extraction(
@@ -100,6 +112,12 @@ def run_extraction(
     artists_to_extract = target_artists or DEFAULT_TARGET_ARTISTS
     current_snapshot = snapshot_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    # Strict regex validation to prevent path traversal via date parameter (S8707)
+    if not re.match(_DATE_PATTERN, current_snapshot):
+        raise ValueError(
+            f"Security: Invalid snapshot_date format '{current_snapshot}'. Must be YYYY-MM-DD."
+        )
+
     # Sanitize user-supplied output_dir against path traversal
     safe_output = _safe_resolve_path(output_dir, label="output-dir")
 
@@ -114,20 +132,20 @@ def run_extraction(
     print("=" * 70)
 
     # 1. Ensure Output & Checkpoint Directories Exist
-    artists_dir = str(safe_output / "artists")
-    albums_dir = str(safe_output / "albums")
-    tracks_dir = str(safe_output / "tracks")
-    checkpoint_dir = str(safe_output / ".checkpoints")
+    artists_dir = _safe_resolve_path(safe_output / "artists", label="artists_dir")
+    albums_dir = _safe_resolve_path(safe_output / "albums", label="albums_dir")
+    tracks_dir = _safe_resolve_path(safe_output / "tracks", label="tracks_dir")
+    checkpoint_dir = _safe_resolve_path(safe_output / ".checkpoints", label="checkpoint_dir")
 
-    os.makedirs(artists_dir, exist_ok=True)
-    os.makedirs(albums_dir, exist_ok=True)
-    os.makedirs(tracks_dir, exist_ok=True)
-    os.makedirs(checkpoint_dir, exist_ok=True)
+    artists_dir.mkdir(parents=True, exist_ok=True)
+    albums_dir.mkdir(parents=True, exist_ok=True)
+    tracks_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    artists_file = os.path.join(artists_dir, f"artists_{current_snapshot}.json")
-    albums_file = os.path.join(albums_dir, f"albums_{current_snapshot}.json")
-    tracks_file = os.path.join(tracks_dir, f"tracks_{current_snapshot}.json")
-    checkpoint_file = os.path.join(checkpoint_dir, f"checkpoint_{current_snapshot}.json")
+    artists_file = _safe_resolve_path(artists_dir / f"artists_{current_snapshot}.json", label="artists_file")
+    albums_file = _safe_resolve_path(albums_dir / f"albums_{current_snapshot}.json", label="albums_file")
+    tracks_file = _safe_resolve_path(tracks_dir / f"tracks_{current_snapshot}.json", label="tracks_file")
+    checkpoint_file = _safe_resolve_path(checkpoint_dir / f"checkpoint_{current_snapshot}.json", label="checkpoint_file")
 
     # 2. Manage Checkpoint & Pre-existing Data
     if reset_checkpoint:
@@ -135,8 +153,8 @@ def run_extraction(
         all_artists: List[Dict[str, Any]] = []
         all_albums: List[Dict[str, Any]] = []
         all_tracks: List[Dict[str, Any]] = []
-        if os.path.exists(checkpoint_file):
-            os.remove(checkpoint_file)
+        if checkpoint_file.exists():
+            checkpoint_file.unlink()
         print("🧹 Checkpoint reset: starting extraction from scratch.")
     else:
         completed_artists = load_checkpoint(checkpoint_file)
@@ -144,7 +162,7 @@ def run_extraction(
         all_artists = []
         all_albums = []
         prior_snapshot_date = None
-        if os.path.exists(artists_file):
+        if artists_file.exists():
             try:
                 with open(artists_file, "r", encoding="utf-8") as f:
                     all_artists = json.load(f)
@@ -158,7 +176,7 @@ def run_extraction(
                 all_artists, all_albums, all_tracks = [], [], []
         else:
             # Look for verified prior snapshot from watermark manager to inherit base catalog
-            if os.path.exists(artists_dir):
+            if artists_dir.exists():
                 try:
                     from src.orchestration.watermark_manager import WatermarkManager
                     wm = WatermarkManager()
@@ -166,7 +184,7 @@ def run_extraction(
                     if (
                         last_watermark != "1970-01-01" 
                         and last_watermark < current_snapshot 
-                        and os.path.exists(os.path.join(artists_dir, f"artists_{last_watermark}.json"))
+                        and (_safe_resolve_path(artists_dir / f"artists_{last_watermark}.json", label="prior_watermark")).exists()
                     ):
                         prior_snapshot_date = last_watermark
                 except Exception:
@@ -174,17 +192,17 @@ def run_extraction(
 
                 if not prior_snapshot_date:
                     prior_files = sorted([
-                        f for f in os.listdir(artists_dir) 
-                        if f.startswith("artists_") and f.endswith(".json") and f < f"artists_{current_snapshot}.json"
+                        f for f in os.listdir(str(artists_dir)) 
+                        if f.startswith("artists_") and f.endswith(_JSON_EXTENSION) and f < f"artists_{current_snapshot}{_JSON_EXTENSION}"
                     ])
                     if prior_files:
                         latest_prior = prior_files[-1]
-                        prior_snapshot_date = latest_prior.replace("artists_", "").replace(".json", "")
+                        prior_snapshot_date = latest_prior.replace("artists_", "").replace(_JSON_EXTENSION, "")
 
-                if prior_snapshot_date:
-                    prior_artists_file = os.path.join(artists_dir, f"artists_{prior_snapshot_date}.json")
-                    prior_albums_file = os.path.join(albums_dir, f"albums_{prior_snapshot_date}.json")
-                    prior_tracks_file = os.path.join(tracks_dir, f"tracks_{prior_snapshot_date}.json")
+                if prior_snapshot_date and re.match(_DATE_PATTERN, prior_snapshot_date):
+                    prior_artists_file = _safe_resolve_path(artists_dir / f"artists_{prior_snapshot_date}.json", label="prior_artists")
+                    prior_albums_file = _safe_resolve_path(albums_dir / f"albums_{prior_snapshot_date}.json", label="prior_albums")
+                    prior_tracks_file = _safe_resolve_path(tracks_dir / f"tracks_{prior_snapshot_date}.json", label="prior_tracks")
                     try:
                         with open(prior_artists_file, "r", encoding="utf-8") as f:
                             all_artists = json.load(f)
@@ -214,11 +232,12 @@ def run_extraction(
             cached_tracks_by_album.setdefault(alb_id, []).append(t)
 
     # If current run has no cached tracks, scan historical raw tracks files
-    if not cached_tracks_by_album and os.path.exists(tracks_dir):
-        for fname in sorted(os.listdir(tracks_dir), reverse=True):
-            if fname.endswith(".json") and fname != os.path.basename(tracks_file):
+    if not cached_tracks_by_album and tracks_dir.exists():
+        for fname in sorted(os.listdir(str(tracks_dir)), reverse=True):
+            if fname.endswith(".json") and fname != tracks_file.name:
                 try:
-                    with open(os.path.join(tracks_dir, fname), "r", encoding="utf-8") as f:
+                    safe_track_scan = _safe_resolve_path(tracks_dir / fname, label="historical_tracks")
+                    with open(safe_track_scan, "r", encoding="utf-8") as f:
                         prior_tracks = json.load(f)
                         for t in prior_tracks:
                             alb_id = t.get("album_id")
@@ -345,7 +364,7 @@ def run_extraction(
     print(f"• Total Artists Extracted : {len(all_artists):,} / {len(artists_to_extract)}")
     print(f"• Total Albums Extracted  : {len(all_albums):,}")
     print(f"• Total Tracks Extracted  : {len(all_tracks):,}")
-    print(f"• Completed Artists       : {sorted(list(completed_artists))}")
+    print(f"• Completed Artists       : {sorted(completed_artists)}")
     print(f"• Total Execution Time    : {elapsed:.2f} seconds")
     print(f"• Total Spotify API Calls : {client.request_count} (Measured telemetry)")
 
@@ -365,7 +384,7 @@ def run_extraction(
         "artists_count": len(all_artists),
         "albums_count": len(all_albums),
         "tracks_count": len(all_tracks),
-        "completed_artists": sorted(list(completed_artists)),
+        "completed_artists": sorted(completed_artists),
         "is_complete": is_complete,
         "elapsed_seconds": elapsed,
         "api_calls_count": client.request_count,
@@ -403,7 +422,11 @@ def parse_args():
         default=None,
         help="Optional release date filter (YYYY-MM-DD) to only extract albums released on or after this date.",
     )
-    return parser.parse_args()
+    parsed = parser.parse_args()
+    if parsed.snapshot_date and not re.match(_DATE_PATTERN, parsed.snapshot_date):
+        parser.error(f"Invalid --snapshot-date format '{parsed.snapshot_date}'. Must be YYYY-MM-DD.")
+    return parsed
+
 
 
 if __name__ == "__main__":

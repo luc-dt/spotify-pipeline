@@ -42,12 +42,8 @@ jobs:
         run: |
           python -m py_compile $(find src/ streamlit/ tests/ -name "*.py")
 
-      # 6. GENERATE GOLD LAYER: Required for integration tests (reads gold parquet files)
-      - name: 🏆 Generate Gold Layer Data
-        run: |
-          PYTHONIOENCODING=utf-8 python scripts/run_gold.py --all
-
-      # 7. TEST EXECUTION: Pytest uses our pytest.ini and executes all 52 tests!
+      # 6. TEST EXECUTION: Pytest uses our pytest.ini and executes all 53 tests!
       - name: 🧪 Run Automated Test Suite (Pytest)
         run: |
           pytest -v
+
