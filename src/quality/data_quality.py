@@ -13,7 +13,7 @@ Returns structured evaluation results and generates audit-ready reports.
 
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import (
@@ -372,7 +372,7 @@ class DataQualityChecker:
 
         return {
             "snapshot_date": self.snapshot_date,
-            "evaluated_at": datetime.utcnow().isoformat() + "Z",
+            "evaluated_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": overall_status,
             "summary": {
                 "total_checks": total_checks,
